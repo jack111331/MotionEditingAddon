@@ -5,10 +5,10 @@ tokens = (
     'ZPOSITION', 'XROTATION', 'YROTATION', 'ZROTATION',
     'HIERARCHY', 'ROOT', 'OFFSET', 'CHANNELS', 'JOINT',
     'ENDJOINT', 'MOTION', 'FRAMES', 'FRAMETIME', 'NAME', 'FNUMBER'
-                                                         'NUMBER', 'LPAREN', 'RPAREN',
+     'NUMBER', 'LPAREN', 'RPAREN',
 )
 def BVHLexer():
-
+    is_in_motion_section = False
     # Tokens
 
     # Modified tokens
@@ -27,14 +27,31 @@ def BVHLexer():
     t_OFFSET = r'(?i)OFFSET'
     t_CHANNELS = r'(?i)CHANNELS'
     t_JOINT = r'(?i)JOINT'
-    t_ENDJOINT = r'(?i)END\ +SITE' #spacing
-    t_MOTION = r'(?i)MOTION'
-    t_FRAMES = r'(?i)FRAMES\ *:'
-    t_FRAMETIME = r'(?i)FRAME\ +TIME\ *:'
+    t_ENDJOINT = r'(?i)END\ +SITE'
 
     t_LPAREN  = r'{'
     t_RPAREN  = r'}'
     t_NAME    = r'[a-zA-Z]+'
+
+    def t_MOTION(t):
+        r'(?i)MOTION'
+        nonlocal is_in_motion_section
+        is_in_motion_section = True
+        return t
+
+    def t_FRAMES(t):
+        r'(?i)FRAMES\ *:'
+        nonlocal is_in_motion_section
+        if is_in_motion_section == False:
+            print("[Error] Not in motion section")
+        return t
+
+    def t_FRAMETIME(t):
+        r'(?i)FRAME\ +TIME\ *:'
+        nonlocal is_in_motion_section
+        if is_in_motion_section == False:
+            print("[Error] Not in motion section")
+        return t
 
     def t_FNUMBER(t):
         r'[\+\-]*\d+\.\d+'
