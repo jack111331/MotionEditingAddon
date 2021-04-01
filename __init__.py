@@ -6,7 +6,7 @@ bl_info = {
     "name": "BVH parser and motion path editing",
     "author": "Edge",
     "version": (1, 0, 0),
-    "blender": (2, 83, 5),
+    "blender": (2, 81, 6),
     "location": "File > Import",
     "description": "import .bvh file",
     "warning": "",
@@ -16,8 +16,9 @@ bl_info = {
 }
 
 class BVHImport(bpy.types.Operator, ImportHelper):
-    bl_idname = "edge_workspace.bvh_import"
+    bl_idname = "edge_bvh_workspace.bvh"
     bl_label = "Import BVH data"
+    bl_options = {'REGISTER', 'UNDO'}
 
     # ImportHelper mixin class uses this
     filename_ext = ".bvh"
@@ -30,8 +31,7 @@ class BVHImport(bpy.types.Operator, ImportHelper):
 
     def execute(self, context):
         print("Opening: ", self.filepath)
-        parser = bvh.BVHParser(self.filepath)
-        return {'FINISHED'}
+        return bvh.load(context, self.filepath)
 
 
 # Only needed if you want to add into a dynamic menu
