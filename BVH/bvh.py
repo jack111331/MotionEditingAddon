@@ -1,4 +1,4 @@
-import bvh_lex
+from . import bvh_lex
 class BVHNode:
 	channel_layout = ['XPOSITION', 'YPOSITION',
 					  'ZPOSITION', 'XROTATION', 'YROTATION', 'ZROTATION']
