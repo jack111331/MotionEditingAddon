@@ -14,8 +14,8 @@ class BVHNode:
         self.in_motion_start_idx = 0
         self.rest_head_local = Vector((0.0, 0.0, 0.0))
         self.rest_head_world = Vector((0.0, 0.0, 0.0))
-        self.rest_tail_local = Vector((0.0, 0.0, 0.0))
-        self.rest_tail_world = Vector((0.0, 0.0, 0.0))
+        self.rest_tail_local = None
+        self.rest_tail_world = None
         self.parent = None
         self.children = []
         self.has_loc = False
@@ -121,9 +121,9 @@ class BVHParser:
                 self.node_list.append(node)
                 layer_stack.append(node)
             elif token.type == "OFFSET":
-                self.node_list[-1].parse_offset(bvh_lexer)
+                layer_stack[-1].parse_offset(bvh_lexer)
             elif token.type == "CHANNELS":
-                joint_parameter_amount = self.node_list[-1].parse_channel_layout(bvh_lexer, self.joint_parameter_amount)
+                joint_parameter_amount = layer_stack[-1].parse_channel_layout(bvh_lexer, self.joint_parameter_amount)
                 self.joint_parameter_amount += joint_parameter_amount
             elif token.type == "JOINT":
                 node = BVHNode()
@@ -141,8 +141,11 @@ class BVHParser:
                 pass
             elif token.type == "RPAREN":
                 if end_joint_encounter == True:
-                    layer_stack[-1].parent.rest_tail_world += layer_stack[-1].rest_head_world
-                    layer_stack[-1].parent.rest_tail_local += layer_stack[-1].rest_head_world
+                    print(layer_stack[-1].parent.rest_head_world)
+                    print(layer_stack[-1].rest_head_local)
+                    print(layer_stack[-1].parent.rest_head_local)
+                    layer_stack[-1].parent.rest_tail_world = layer_stack[-1].parent.rest_head_world + layer_stack[-1].rest_head_local
+                    layer_stack[-1].parent.rest_tail_local = layer_stack[-1].parent.rest_head_local + layer_stack[-1].rest_head_local
                     end_joint_encounter = False
                 layer_stack.pop()
             elif token.type == "MOTION":
@@ -150,12 +153,12 @@ class BVHParser:
                 self.motion_list.append(motion)
                 motion.parse_motion(bvh_lexer, self.joint_parameter_amount)
             else:
-                print("Unidentified token")
+                print("Unidentified token: ", token)
 
         # Now set the tip of each bvh_node
         for bvh_node in self.node_list:
-
-            if not bvh_node.rest_tail_world:
+            print(bvh_node.rest_tail_world, bvh_node.children)
+            if bvh_node.rest_tail_world == None:
                 if len(bvh_node.children) == 0:
                     # could just fail here, but rare BVH files have childless nodes
                     bvh_node.rest_tail_world = Vector(bvh_node.rest_head_world)
@@ -412,4 +415,4 @@ def load(context, bvh_filepath):
 
 
 if __name__ == '__main__':
-    parser = BVHParser("bvh_example/BVH.bvh")
+    parser = BVHParser("../bvh_example/01_01.bvh")

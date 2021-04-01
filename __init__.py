@@ -1,6 +1,6 @@
 import bpy
 from bpy_extras.io_utils import ImportHelper
-from BVH import bvh
+from .BVH import bvh
 
 bl_info = {
     "name": "BVH parser and motion path editing",

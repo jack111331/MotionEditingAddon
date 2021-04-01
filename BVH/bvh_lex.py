@@ -1,4 +1,4 @@
-from ply import lex
+from ..ply import lex
 
 tokens = (
     'XPOSITION', 'YPOSITION',
@@ -59,7 +59,7 @@ def BVHLexer():
         return t
 
     def t_NUMBER(t):
-        r'\d+'
+        r'[\+\-]*\d+'
         t.value = int(t.value)
         return t
 
@@ -71,6 +71,7 @@ def BVHLexer():
         t.lexer.lineno += t.value.count("\n")
 
     def t_error(t):
+        print("At ", t.lexer.lineno)
         print(f"Illegal character {t.value[0]!r}")
         t.lexer.skip(1)
 
