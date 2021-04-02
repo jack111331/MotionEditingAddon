@@ -1,6 +1,6 @@
 import bpy
 from bpy_extras.io_utils import ImportHelper, orientation_helper, axis_conversion
-from .BVH import bvh
+from .BVH import bvh, motion_editing
 
 bl_info = {
     "name": "BVH parser and motion path editing",
@@ -45,7 +45,10 @@ class BVHImport(bpy.types.Operator, ImportHelper):
         ).to_4x4()
 
         keywords["global_matrix"] = global_matrix
-        return bvh.load(context, **keywords)
+        parser = bvh.load(context, **keywords)
+        motion_path_animation = motion_editing.MotionPathAnimation.add_path_animation_from_parser(context, parser, global_matrix)
+        motion_path_animation.create_path()
+        return {'FINISHED'}
 
 
 # Only needed if you want to add into a dynamic menu
