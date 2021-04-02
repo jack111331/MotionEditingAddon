@@ -1,5 +1,6 @@
 from . import bvh_lex
 import bpy
+from math import radians
 from mathutils import Vector, Matrix, Euler
 
 
@@ -45,13 +46,16 @@ class BVHNode:
             type = bvh_lex.token().type
             if type == "XROTATION":
                 self.rot_order_str += "X"
+            elif type == "YROTATION":
                 self.rot_order_str += "Y"
+            elif type == "ZROTATION":
                 self.rot_order_str += "Z"
             for j in range(len(BVHNode.channel_layout)):
                 if type == BVHNode.channel_layout[j]:
                     self.channel_layout_assign[j] = i
                     break
         self.in_motion_start_idx = joint_parameter_amount
+        print(self.rot_order_str)
         self.has_loc = self.channel_layout_assign[0] != -1 or self.channel_layout_assign[1] != -1 or self.channel_layout_assign[2] != -1
         self.has_rot = self.channel_layout_assign[3] != -1 or self.channel_layout_assign[4] != -1 or self.channel_layout_assign[5] != -1
         return self.channels
@@ -71,11 +75,11 @@ class AggregateFrame:
     def get_loc(self, bone_index):
         channel = self.frame.motion_parameter_list[self.node_list[bone_index].in_motion_start_idx:self.node_list[bone_index].in_motion_start_idx+self.node_list[bone_index].channels]
         x, y, z = 0.0, 0.0, 0.0
-        if self.node_list[bone_index].channel_layout_assign[0]:
+        if self.node_list[bone_index].channel_layout_assign[0] != -1:
             x = channel[self.node_list[bone_index].channel_layout_assign[0]]
-        if self.node_list[bone_index].channel_layout_assign[1]:
+        if self.node_list[bone_index].channel_layout_assign[1] != -1:
             y = channel[self.node_list[bone_index].channel_layout_assign[1]]
-        if self.node_list[bone_index].channel_layout_assign[2]:
+        if self.node_list[bone_index].channel_layout_assign[2] != -1:
             z = channel[self.node_list[bone_index].channel_layout_assign[2]]
 
         return [x, y, z]
@@ -83,14 +87,14 @@ class AggregateFrame:
     def get_rot(self, bone_index):
         channel = self.frame.motion_parameter_list[self.node_list[bone_index].in_motion_start_idx:self.node_list[bone_index].in_motion_start_idx+self.node_list[bone_index].channels]
         x, y, z = 0.0, 0.0, 0.0
-        if self.node_list[bone_index].channel_layout_assign[3]:
+        if self.node_list[bone_index].channel_layout_assign[3] != -1:
             x = channel[self.node_list[bone_index].channel_layout_assign[3]]
-        if self.node_list[bone_index].channel_layout_assign[4]:
+        if self.node_list[bone_index].channel_layout_assign[4] != -1:
             y = channel[self.node_list[bone_index].channel_layout_assign[4]]
-        if self.node_list[bone_index].channel_layout_assign[5]:
+        if self.node_list[bone_index].channel_layout_assign[5] != -1:
             z = channel[self.node_list[bone_index].channel_layout_assign[5]]
 
-        return [x, y, z]
+        return [radians(x), radians(y), radians(z)]
 
 class Frame:
     def __init__(self):
@@ -147,6 +151,7 @@ class BVHParser:
                 node = BVHNode()
                 node.parse_joint_name(bvh_lexer)
                 layer_stack.append(node)
+                print([bone.joint_name for bone in layer_stack])
                 self.node_list.append(node)
             elif token.type == "OFFSET":
                 layer_stack[-1].parse_offset(bvh_lexer)
@@ -164,19 +169,16 @@ class BVHParser:
                 end_joint_encounter = True
                 node = BVHNode()
                 node.assign_parent(layer_stack[-1])
+                node.joint_name = "Dummy"
                 layer_stack.append(node)
             elif token.type == "LPAREN":
                 pass
             elif token.type == "RPAREN":
                 if end_joint_encounter == True:
-                    print(layer_stack[-1].parent.rest_head_world)
-                    print(layer_stack[-1].rest_head_local)
-                    print(layer_stack[-1].parent.rest_head_local)
                     layer_stack[-1].parent.rest_tail_world = layer_stack[-1].parent.rest_head_world + layer_stack[-1].rest_head_local
                     layer_stack[-1].parent.rest_tail_local = layer_stack[-1].parent.rest_head_local + layer_stack[-1].rest_head_local
                     end_joint_encounter = False
-                else:
-                    layer_stack.pop()
+                layer_stack.pop()
             elif token.type == "MOTION":
                 motion = Motion()
                 self.motion_list.append(motion)
@@ -264,10 +266,27 @@ def bvh_node_dict2armature(
 
     bvh_nodes_list = bvh_parser.node_list
 
+    # Get the average bone length for zero length bones, we may not use this.
+    average_bone_length = 0.0
+    nonzero_count = 0
+    for bvh_node in bvh_nodes_list:
+        l = (bvh_node.rest_head_local - bvh_node.rest_tail_local).length
+        if l:
+            average_bone_length += l
+            nonzero_count += 1
+
+    # Very rare cases all bones could be zero length???
+    if not average_bone_length:
+        average_bone_length = 0.1
+    else:
+        # Normal operation
+        average_bone_length = average_bone_length / nonzero_count
+
     # XXX, annoying, remove bone.
     while arm_data.edit_bones:
         arm_ob.edit_bones.remove(arm_data.edit_bones[-1])
 
+    ZERO_AREA_BONES = []
     for bvh_node in bvh_nodes_list:
         # New editbone
         bone = bvh_node.temp = arm_data.edit_bones.new(bvh_node.joint_name)
@@ -275,12 +294,34 @@ def bvh_node_dict2armature(
         bone.head = bvh_node.rest_head_world
         bone.tail = bvh_node.rest_tail_world
 
+        # Zero Length Bones! (an exceptional case)
+        if (bone.head - bone.tail).length < 0.001:
+            print("\tzero length bone found:", bone.name)
+            if bvh_node.parent:
+                ofs = bvh_node.parent.rest_head_local - bvh_node.parent.rest_tail_local
+                if ofs.length:  # is our parent zero length also?? unlikely
+                    bone.tail = bone.tail - ofs
+                else:
+                    bone.tail.y = bone.tail.y + average_bone_length
+            else:
+                bone.tail.y = bone.tail.y + average_bone_length
+
+            ZERO_AREA_BONES.append(bone.name)
+
     for bvh_node in bvh_nodes_list:
         if bvh_node.parent:
             # bvh_node.temp is the Editbone
 
             # Set the bone parent
             bvh_node.temp.parent = bvh_node.parent.temp
+
+            # Set the connection state
+            if(
+                    (not bvh_node.has_loc) and
+                    (bvh_node.parent.temp.name not in ZERO_AREA_BONES) and
+                    (bvh_node.parent.rest_tail_local == bvh_node.rest_head_local)
+            ):
+                bvh_node.temp.use_connect = True
 
     # Replace the editbone with the editbone name,
     # to avoid memory errors accessing the editbone outside editmode
@@ -295,8 +336,10 @@ def bvh_node_dict2armature(
     pose = arm_ob.pose
     pose_bones = pose.bones
 
-    for pose_bone in pose_bones:
-        pose_bone.rotation_mode = "XYZ"
+    for bvh_node in bvh_nodes_list:
+        bone_name = bvh_node.temp  # may not be the same name as the bvh_node, could have been shortened.
+        pose_bone = pose_bones[bone_name]
+        pose_bone.rotation_mode = bvh_node.rot_order_str
 
     context.view_layer.update()
 
@@ -415,18 +458,18 @@ def bvh_node_dict2armature(
             bez.interpolation = 'LINEAR'
 
     # finally apply matrix
-    # arm_ob.matrix_world = global_matrix
+    arm_ob.matrix_world = global_matrix
     bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
     return arm_ob
 
 
-def load(context, bvh_filepath, global_matrix=None):
-    parser = BVHParser(bvh_filepath)
+def load(context, filepath, global_matrix=None):
+    parser = BVHParser(filepath)
 
     scene = context.scene
     frame_orig = scene.frame_current
-    bvh_name = bpy.path.display_name_from_filepath(bvh_filepath)
+    bvh_name = bpy.path.display_name_from_filepath(filepath)
     bvh_node_dict2armature(context, bvh_name, parser, global_matrix=global_matrix)
     context.scene.frame_set(frame_orig)
     return {'FINISHED'}

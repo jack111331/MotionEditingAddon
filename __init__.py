@@ -1,5 +1,5 @@
 import bpy
-from bpy_extras.io_utils import ImportHelper
+from bpy_extras.io_utils import ImportHelper, orientation_helper, axis_conversion
 from .BVH import bvh
 
 bl_info = {
@@ -15,6 +15,7 @@ bl_info = {
     "category": "Import-Export",
 }
 
+@orientation_helper(axis_forward='-Z', axis_up='Y')
 class BVHImport(bpy.types.Operator, ImportHelper):
     bl_idname = "edge_bvh_workspace.bvh"
     bl_label = "Import BVH data"
@@ -31,7 +32,20 @@ class BVHImport(bpy.types.Operator, ImportHelper):
 
     def execute(self, context):
         print("Opening: ", self.filepath)
-        return bvh.load(context, self.filepath)
+        keywords = self.as_keywords(
+            ignore=(
+                "axis_forward",
+                "axis_up",
+                "filter_glob",
+            )
+        )
+        global_matrix = axis_conversion(
+            from_forward=self.axis_forward,
+            from_up=self.axis_up,
+        ).to_4x4()
+
+        keywords["global_matrix"] = global_matrix
+        return bvh.load(context, **keywords)
 
 
 # Only needed if you want to add into a dynamic menu
