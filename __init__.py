@@ -1,5 +1,6 @@
 import bpy
 from bpy_extras.io_utils import ImportHelper, orientation_helper, axis_conversion
+from bpy.props import BoolProperty
 import subprocess
 import os
 
@@ -67,6 +68,64 @@ class BVHImport(bpy.types.Operator, ImportHelper):
         return motion_path_animation.create_path()
 
 
+class ApplyAnimation(bpy.types.Operator):
+    bl_idname = "generated_animation.keyframe"
+    bl_label = "apply generated keyframe animation"
+    bl_description = "select animation collection and apply motion on it"
+
+    @classmethod
+    def poll(cls, context):
+        # path_animation is not empty
+        collection_name = context.scene.select_collection_name
+
+        motion_path_animation = motion_editing.MotionPathAnimation.get_path_from_collection_name(collection_name)
+
+        return motion_path_animation != None
+
+    def execute(self, context):
+        collection_name = context.scene.select_collection_name
+
+        motion_path_animation = motion_editing.MotionPathAnimation.get_path_from_collection_name(collection_name)
+        arm_ob = bpy.data.objects[motion_path_animation.bvh_parser.name]
+        if motion_path_animation != None:
+            if context.scene.use_origin_motion == True:
+                motion_path_animation.bvh_parser.motion_list[0].apply_motion_on_armature(context, motion_path_animation.bvh_parser.node_list, arm_ob, 1, motion_path_animation.global_matrix)
+            else:
+                motion_path_animation.new_motion_data.apply_motion_on_armature(context, motion_path_animation.bvh_parser.node_list, arm_ob, 1, motion_path_animation.global_matrix)
+
+        return {'FINISHED'}
+
+class PathAnimationGeneratePanel(bpy.types.Panel):
+    bl_idname = "PT_PATH_ANIMATION_GENERATE"
+    bl_label = "path animation panel"
+    bl_category = "Motion Animation"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+
+
+
+    def draw(self, context):
+        layout = self.layout
+        # scene = context.scene
+
+        row = layout.row()
+        # select collection will assign to context.scene.select_animation
+        # and search from bpy.data.collections
+        row.prop_search(
+            data=context.scene,
+            property="select_collection_name",
+            search_data=bpy.data,
+            search_property="collections",
+            text="animation")
+
+        row = layout.row()
+        row.prop(context.scene, "use_origin_motion", text="Use origin motion")
+
+        row = layout.row()
+        row.operator('generated_animation.keyframe', text="apply animation")
+
+
+
 # Only needed if you want to add into a dynamic menu
 def menu_func_import(self, context):
     self.layout.operator(BVHImport.bl_idname, text="Motion Path Editing(.bvh)")
@@ -74,11 +133,19 @@ def menu_func_import(self, context):
 
 def register():
     bpy.utils.register_class(BVHImport)
+    bpy.utils.register_class(ApplyAnimation)
+    bpy.utils.register_class(PathAnimationGeneratePanel)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+
+    # Register this property so that we can easily access the selected collection through panel
+    bpy.types.Scene.select_collection_name = bpy.props.StringProperty()
+    bpy.types.Scene.use_origin_motion = BoolProperty(name="use_origin_motion")
 
 
 def unregister():
     bpy.utils.unregister_class(BVHImport)
+    bpy.utils.unregister_class(ApplyAnimation)
+    bpy.utils.unregister_class(PathAnimationGeneratePanel)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
 
 

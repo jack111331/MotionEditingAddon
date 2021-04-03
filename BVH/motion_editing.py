@@ -131,6 +131,13 @@ class MotionPathAnimation:
             self.global_matrix = global_matrix
 
     @classmethod
+    def get_path_from_collection_name(cls, collection_name):
+        for i in range(len(cls.path_animations)):
+            if cls.path_animations[i].bvh_parser.name == collection_name:
+                return cls.path_animations[i]
+        return None
+
+    @classmethod
     def add_path_animation_from_parser(cls, context, parser, global_matrix):
         motion_path_animation = MotionPathAnimation(parser, context, global_matrix)
         MotionPathAnimation.path_animations.append(motion_path_animation)
@@ -183,9 +190,6 @@ class MotionPathAnimation:
 
         c_points, self.u = solve_cubic_bspline(self.initial_motion_curve.data.splines[0].points.values())
 
-        print("Control Point", c_points)
-        print("t", self.u)
-
         for i in range(len(c_points)):
             create_cube(self.control_point_collection, "c_" + str(i), c_points[i], self.global_matrix, 10.0)
 
@@ -227,11 +231,13 @@ class MotionPathAnimation:
 
             self.initial_to_new_path_transform_matrix_list.append(transform_matrix)
 
-        self.new_motion_data = self.bvh_parser.motion_list[0].generate_root_pos_and_orientation(
-            self.bvh_parser.node_list, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
+        self.new_motion_data = self.bvh_parser.motion_list[0].generate_all_node_pos_and_orientation(
+            self.bvh_parser, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
         curve = []
-        for i in range(len(self.new_motion_data)):
-            curve.append(self.new_motion_data[i][:3])
+        for i in range(len(self.new_motion_data.frame_list)):
+            curve.append(self.new_motion_data.frame_list[i].motion_parameter_list[
+                         self.bvh_parser.node_list[0].in_motion_start_idx:self.bvh_parser.node_list[
+                                                                              0].in_motion_start_idx + 3])
 
         return create_poly_curve(self.context, self.path_collection, "new_motion_curve", curve, self.global_matrix)
 
