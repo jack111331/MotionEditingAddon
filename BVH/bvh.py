@@ -151,7 +151,7 @@ class AggregateFrame:
 
         return [x, y, z]
 
-    def get_rot(self, bone_index):
+    def get_rot(self, bone_index, ret_redians=True):
         channel = self.frame.motion_parameter_list[
                   self.node_list[bone_index].in_motion_start_idx:self.node_list[bone_index].in_motion_start_idx +
                                                                  self.node_list[bone_index].channels]
@@ -163,7 +163,10 @@ class AggregateFrame:
         if self.node_list[bone_index].channel_layout_assign[5] != -1:
             z = channel[self.node_list[bone_index].channel_layout_assign[5]]
 
-        return [radians(x), radians(y), radians(z)]
+        if ret_redians == True:
+            return [radians(x), radians(y), radians(z)]
+        else:
+            return [x, y, z]
 
     def to_channel(self, bone_index, loc, rot):
         channel = [0] * self.node_list[bone_index].channels
@@ -174,15 +177,21 @@ class AggregateFrame:
                 channel[self.node_list[bone_index].channel_layout_assign[i + 3]] = rot[i]
         return channel
 
-
     def added_offset_to_channel(self, bone_index, loc, rot):
         channel = [0] * self.node_list[bone_index].channels
         in_motion_start_idx = self.node_list[bone_index].in_motion_start_idx
         for i in range(3):
             if self.node_list[bone_index].channel_layout_assign[i] != -1:
-                channel[self.node_list[bone_index].channel_layout_assign[i]] = self.frame.motion_parameter_list[in_motion_start_idx+self.node_list[bone_index].channel_layout_assign[i]] + loc[i]
+                channel[self.node_list[bone_index].channel_layout_assign[i]] = self.frame.motion_parameter_list[
+                                                                                   in_motion_start_idx + self.node_list[
+                                                                                       bone_index].channel_layout_assign[
+                                                                                       i]] + loc[i]
             if self.node_list[bone_index].channel_layout_assign[i + 3] != -1:
-                channel[self.node_list[bone_index].channel_layout_assign[i + 3]] = self.frame.motion_parameter_list[in_motion_start_idx+self.node_list[bone_index].channel_layout_assign[i+3]] + rot[i]
+                channel[self.node_list[bone_index].channel_layout_assign[i + 3]] = self.frame.motion_parameter_list[
+                                                                                       in_motion_start_idx +
+                                                                                       self.node_list[
+                                                                                           bone_index].channel_layout_assign[
+                                                                                           i + 3]] + rot[i]
         return channel
 
 
@@ -442,15 +451,15 @@ class Motion:
         return new_motion
 
     def concatenate(self, bvh_parser, concatenate_motion):
-        concatenate_start_frame_idx = self.frame_amount
+        concatenate_start_frame_idx = len(self.frame_list)
         aggregate_frame = AggregateFrame()
         aggregate_frame.assign_node_list(bvh_parser.node_list)
         aggregate_frame.assign_frame(self.frame_list[-1])
         last_loc = aggregate_frame.get_loc(0)
-        last_rot = aggregate_frame.get_rot(0)
+        last_rot = aggregate_frame.get_rot(0, ret_redians=False)
         aggregate_frame.assign_frame(concatenate_motion.frame_list[0])
         new_loc = aggregate_frame.get_loc(0)
-        new_rot = aggregate_frame.get_rot(0)
+        new_rot = aggregate_frame.get_rot(0, ret_redians=False)
 
         # drag concatenate motion to current motion
         offset_loc = [last_loc[i] - new_loc[i] for i in range(len(new_loc))]
@@ -462,11 +471,70 @@ class Motion:
             for i in range(len(bvh_parser.node_list)):
                 in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
                 channels = bvh_parser.node_list[i].channels
-                new_frame.motion_parameter_list[in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
+                new_frame.motion_parameter_list[
+                in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
                     i, offset_loc, offset_rot)
             self.frame_list.append(new_frame)
 
         self.frame_amount = len(self.frame_list)
+        self.smooth_motion(bvh_parser, concatenate_start_frame_idx - 1, 30)
+
+    def smooth_motion(self, bvh_parser, concatenate_frame, smooth_window):
+        smooth_frame_start = concatenate_frame - smooth_window
+        smooth_frame_end = concatenate_frame + smooth_window
+
+        aggregate_frame = AggregateFrame()
+        aggregate_frame.assign_node_list(bvh_parser.node_list)
+        offset_loc_list = []
+        offset_rot_list = []
+        for i in range(len(bvh_parser.node_list)):
+            # calculate each node's offset inbetween concatenate frame
+            aggregate_frame.assign_frame(self.frame_list[concatenate_frame])
+            previous_loc = aggregate_frame.get_loc(i)
+            previous_rot = aggregate_frame.get_rot(i, ret_redians=False)
+            aggregate_frame.assign_frame(self.frame_list[concatenate_frame + 1])
+            new_loc = aggregate_frame.get_loc(i)
+            new_rot = aggregate_frame.get_rot(i, ret_redians=False)
+            offset_loc = [(new_loc[i] - previous_loc[i]) for i in range(len(new_loc))]
+            offset_rot = [(new_rot[i] - previous_rot[i]) for i in range(len(new_rot))]
+            if i == 2:
+                print("original discontinuity in joint 2", offset_rot)
+            offset_loc_list.append(offset_loc)
+            offset_rot_list.append(offset_rot)
+
+        for frame_i in range(smooth_frame_start, smooth_frame_end + 1):
+            if 0 < frame_i < self.frame_amount:
+                smooth_factor = self.smooth_function(frame_i, concatenate_frame, smooth_window)
+                for i in range(len(bvh_parser.node_list)):
+                    offset_loc = [smooth_factor * offset_loc_list[i][j] for j in range(len(offset_loc_list[i]))]
+                    offset_rot = [smooth_factor * offset_rot_list[i][j] for j in range(len(offset_rot_list[i]))]
+                    aggregate_frame.assign_frame(self.frame_list[frame_i])
+                    if i == 2:
+                        original_rot = aggregate_frame.get_rot(i, ret_redians=False)
+                        print(frame_i, [original_rot[j] for j in range(len(original_rot))])
+                        print(frame_i, [smooth_factor * offset_rot_list[i][j] + original_rot[j] for j in
+                                        range(len(offset_rot_list[i]))])
+                    in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
+                    channels = bvh_parser.node_list[i].channels
+                    self.frame_list[frame_i].motion_parameter_list[
+                    in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
+                        i, offset_loc, offset_rot)
+                    if i == 2:
+                        print(self.frame_list[frame_i].motion_parameter_list[
+                              in_motion_start_idx:in_motion_start_idx + channels])
+
+    def smooth_function(self, current_frame, concatenate_frame, window):
+        # reference from maochinn and https://www.cs.toronto.edu/~jacobson/seminar/arikan-and-forsyth-2002.pdf
+        res = 0
+        diff = current_frame - concatenate_frame
+        diff_norm = (diff + window) / window
+        if abs(diff) > window:
+            res = 0
+        elif concatenate_frame - window < current_frame <= concatenate_frame:
+            res = 0.5 * (diff_norm ** 2.0)
+        else:
+            res = -0.5 * (diff_norm ** 2.0) + 2 * diff_norm - 2
+        return res
 
 
 class BVHParser:
