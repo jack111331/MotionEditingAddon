@@ -6,6 +6,8 @@ from ..bspline_regression.fit_uniform_bspline import UniformBSplineLeastSquaresO
 import scipy.spatial
 import numpy as np
 
+from . import bvh
+
 
 def create_poly_curve(context, collection, name, points, global_matrix):
     # create the Curve Datablock
@@ -47,10 +49,13 @@ def solve_cubic_bspline(point_list):
     for point in point_list:
         coordinate_list.append([point.co.xyz[0], point.co.xyz[1], point.co.xyz[2]])
         w.append([1.0, 1.0, 1.0])
-    if len(coordinate_list) // 10 > 100:
+    if len(coordinate_list) > 100:
         control_point_amount = 10
     else:
         control_point_amount = len(coordinate_list) // 8
+    if control_point_amount < 5:
+        control_point_amount = 5
+
     c = UniformBSpline(3, control_point_amount, 3, is_closed=False)
     X = np.linspace(coordinate_list[0], coordinate_list[-1], num=control_point_amount)
     u0 = c.uniform_parameterisation(16)
@@ -96,7 +101,7 @@ def create_cubic_bspline_curve(context, collection, control_points, name, u, glo
 
 
 def compute_line_orientation(front, world_up=Vector((0, 1, 0))):
-    z = -front
+    z = front
     x = world_up.cross(z)
     y = z.cross(x)
 
@@ -129,6 +134,17 @@ class MotionPathAnimation:
             self.global_matrix = Matrix.Identity(4)
         else:
             self.global_matrix = global_matrix
+
+    def clone(self):
+        new_bvh_parser = self.bvh_parser.clone()
+        new_bvh_parser.name = new_bvh_parser.name + "$copy"
+        motion_path_animation = MotionPathAnimation(new_bvh_parser, self.context)
+        bvh.bvh_node_dict2armature(self.context, new_bvh_parser.name, new_bvh_parser, global_matrix=self.global_matrix)
+        motion_path_animation.u = self.u[:]
+        motion_path_animation.global_matrix = self.global_matrix
+        MotionPathAnimation.path_animations.append(motion_path_animation)
+        return motion_path_animation
+
 
     @classmethod
     def get_path_from_collection_name(cls, collection_name):
@@ -175,7 +191,7 @@ class MotionPathAnimation:
         curve = []
 
         # use root to track curve
-        root_pos_and_orientation_list = self.bvh_parser.motion_list[0].generate_root_pos_and_orientation(
+        root_pos_and_orientation_list = self.bvh_parser.motion.generate_root_pos_and_orientation(
             self.bvh_parser.node_list)
 
         for i in range(len(root_pos_and_orientation_list)):
@@ -204,7 +220,7 @@ class MotionPathAnimation:
         self.initial_to_new_path_transform_matrix_list = []
         init_curve = self.initial_path.data.splines[0].points.values()
         new_curve = self.new_path.data.splines[0].points.values()
-        for i in range(self.bvh_parser.motion_list[0].frame_amount):
+        for i in range(self.bvh_parser.motion.frame_amount):
             p0 = init_curve[i].co.xyz
             p = new_curve[i].co.xyz
 
@@ -231,7 +247,7 @@ class MotionPathAnimation:
 
             self.initial_to_new_path_transform_matrix_list.append(transform_matrix)
 
-        self.new_motion_data = self.bvh_parser.motion_list[0].generate_all_node_pos_and_orientation(
+        self.new_motion_data = self.bvh_parser.motion.generate_all_node_pos_and_orientation(
             self.bvh_parser, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
         curve = []
         for i in range(len(self.new_motion_data.frame_list)):

@@ -103,6 +103,28 @@ class BVHNode:
                        self.channel_layout_assign[5] != -1
         return self.channels
 
+    def compare_to(self, other_node):
+        if other_node.joint_name != self.joint_name:
+            return False
+        if other_node.channels != self.channels:
+            return False
+        if other_node.channel_layout_assign != self.channel_layout_assign:
+            return False
+        if other_node.in_motion_start_idx != self.in_motion_start_idx:
+            return False
+
+        if (other_node.rest_head_local - self.rest_head_local) >= 1e-6:
+            return False
+        if (other_node.rest_tail_local - self.rest_tail_local) >= 1e-6:
+            return False
+        if self.parent != None and other_node.parent.joint_name != self.parent.joint_name:
+            return False
+        my_children_name_list = [children.joint_name for children in self.children]
+        for children in other_node.children:
+            if children.joint_name not in my_children_name_list:
+                return False
+        return True
+
 
 class AggregateFrame:
     def __init__(self):
@@ -153,6 +175,17 @@ class AggregateFrame:
         return channel
 
 
+    def added_offset_to_channel(self, bone_index, loc, rot):
+        channel = [0] * self.node_list[bone_index].channels
+        in_motion_start_idx = self.node_list[bone_index].in_motion_start_idx
+        for i in range(3):
+            if self.node_list[bone_index].channel_layout_assign[i] != -1:
+                channel[self.node_list[bone_index].channel_layout_assign[i]] = self.frame.motion_parameter_list[in_motion_start_idx+self.node_list[bone_index].channel_layout_assign[i]] + loc[i]
+            if self.node_list[bone_index].channel_layout_assign[i + 3] != -1:
+                channel[self.node_list[bone_index].channel_layout_assign[i + 3]] = self.frame.motion_parameter_list[in_motion_start_idx+self.node_list[bone_index].channel_layout_assign[i+3]] + rot[i]
+        return channel
+
+
 class Frame:
     def __init__(self):
         self.motion_parameter_list = []
@@ -160,6 +193,18 @@ class Frame:
     def parse_frame(self, bvh_lex, joint_parameter_amount):
         for i in range(joint_parameter_amount):
             self.motion_parameter_list.append(bvh_lex.token().value)
+
+    def clone(self):
+        new_frame = Frame()
+        new_frame.motion_parameter_list = self.motion_parameter_list[:]
+        return new_frame
+
+    @staticmethod
+    def clone_list(frame_list):
+        new_frame_list = []
+        for frame in frame_list:
+            new_frame_list.append(frame.clone())
+        return new_frame_list
 
 
 class Motion:
@@ -279,8 +324,6 @@ class Motion:
             pose_bone = pose_bones[bone_name]
             rest_bone = arm_data.bones[bone_name]
             bone_rest_matrix = rest_bone.matrix_local.to_3x3()
-            if bvh_node.in_list_index == 1:
-                print("Rest matrix", bone_rest_matrix)
 
             bone_rest_matrix_inv = Matrix(bone_rest_matrix)
             bone_rest_matrix_inv.invert()
@@ -330,13 +373,12 @@ class Motion:
                 # For each location x, y, z.
                 for axis_i in range(3):
                     curve = action.fcurves.find(data_path=data_path, index=axis_i)
-                    new_curve = False
-                    if curve == None:
-                        curve = action.fcurves.new(data_path=data_path, index=axis_i)
-                        new_curve = True
+                    if curve != None:
+                        action.fcurves.remove(curve)
+                    curve = action.fcurves.new(data_path=data_path, index=axis_i)
+
                     keyframe_points = curve.keyframe_points
-                    if new_curve == True:
-                        keyframe_points.add(num_frame)
+                    keyframe_points.add(num_frame)
 
                     for frame_i in range(num_frame):
                         keyframe_points[frame_i].co = (
@@ -345,9 +387,6 @@ class Motion:
                         )
 
             if bvh_node.has_rot:
-                data_path = None
-                rotate = None
-
                 rotate = [(0.0, 0.0, 0.0)] * num_frame
                 data_path = ('pose.bones["%s"].rotation_euler' %
                              pose_bone.name)
@@ -375,13 +414,11 @@ class Motion:
                 # For each euler angle x, y, z (or quaternion w, x, y, z).
                 for axis_i in range(len(rotate[0])):
                     curve = action.fcurves.find(data_path=data_path, index=axis_i)
-                    new_curve = False
-                    if curve == None:
-                        curve = action.fcurves.new(data_path=data_path, index=axis_i)
-                        new_curve = True
+                    if curve != None:
+                        action.fcurves.remove(curve)
+                    curve = action.fcurves.new(data_path=data_path, index=axis_i)
                     keyframe_points = curve.keyframe_points
-                    if new_curve == True:
-                        keyframe_points.add(num_frame)
+                    keyframe_points.add(num_frame)
 
                     for frame_i in range(num_frame):
                         keyframe_points[frame_i].co = (
@@ -393,107 +430,143 @@ class Motion:
             for bez in cu.keyframe_points:
                 bez.interpolation = 'LINEAR'
 
-
         # finally apply matrix
         arm_ob.matrix_world = global_matrix
         bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
+    def clone(self):
+        new_motion = Motion()
+        new_motion.frame_list = Frame.clone_list(self.frame_list)
+        new_motion.frame_amount = self.frame_amount
+        new_motion.frame_time = self.frame_time
+        return new_motion
+
+    def concatenate(self, bvh_parser, concatenate_motion):
+        concatenate_start_frame_idx = self.frame_amount
+        aggregate_frame = AggregateFrame()
+        aggregate_frame.assign_node_list(bvh_parser.node_list)
+        aggregate_frame.assign_frame(self.frame_list[-1])
+        last_loc = aggregate_frame.get_loc(0)
+        last_rot = aggregate_frame.get_rot(0)
+        aggregate_frame.assign_frame(concatenate_motion.frame_list[0])
+        new_loc = aggregate_frame.get_loc(0)
+        new_rot = aggregate_frame.get_rot(0)
+
+        # drag concatenate motion to current motion
+        offset_loc = [last_loc[i] - new_loc[i] for i in range(len(new_loc))]
+        offset_rot = [last_rot[i] - new_rot[i] for i in range(len(new_loc))]
+
+        for frame_i in range(len(concatenate_motion.frame_list)):
+            new_frame = concatenate_motion.frame_list[frame_i].clone()
+            aggregate_frame.assign_frame(concatenate_motion.frame_list[frame_i])
+            for i in range(len(bvh_parser.node_list)):
+                in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
+                channels = bvh_parser.node_list[i].channels
+                new_frame.motion_parameter_list[in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
+                    i, offset_loc, offset_rot)
+            self.frame_list.append(new_frame)
+
+        self.frame_amount = len(self.frame_list)
+
 
 class BVHParser:
-    def __init__(self, bvh_filename):
+
+    def __init__(self, bvh_filename=""):
         self.node_list = []
         self.joint_parameter_amount = 0
-        self.motion_list = []
+        self.motion = None
         self.name = os.path.splitext(os.path.basename(bvh_filename))[0]
 
-        bvh_lexer = bvh_lex.BVHLexer()
-        try:
-            with open(bvh_filename) as f:
-                bvh_lexer.input(f.read())
-        except IndexError:
-            print('Can\'t open bvh file')
+        if len(bvh_filename) != 0:
+            bvh_lexer = bvh_lex.BVHLexer()
+            try:
+                with open(bvh_filename) as f:
+                    bvh_lexer.input(f.read())
+            except IndexError:
+                print('Can\'t open bvh file')
 
-        layer_stack = []
-        end_joint_encounter = False
-        while True:
-            token = bvh_lexer.token()
-            if token == None:
-                break
+            layer_stack = []
+            end_joint_encounter = False
+            while True:
+                token = bvh_lexer.token()
+                if token == None:
+                    break
 
-            if token.type == "HIERARCHY":
-                print('This is a BVH file')
-            elif token.type == "ROOT":
-                node = BVHNode()
-                node.parse_joint_name(bvh_lexer)
-                node.in_list_index = len(self.node_list)
-                layer_stack.append(node)
-                self.node_list.append(node)
-            elif token.type == "OFFSET":
-                layer_stack[-1].parse_offset(bvh_lexer)
-            elif token.type == "CHANNELS":
-                joint_parameter_amount = layer_stack[-1].parse_channel_layout(bvh_lexer, self.joint_parameter_amount)
-                self.joint_parameter_amount += joint_parameter_amount
-            elif token.type == "JOINT":
-                node = BVHNode()
-                node.assign_parent(layer_stack[-1])
-                layer_stack[-1].add_child(node)
-                node.parse_joint_name(bvh_lexer)
-                node.in_list_index = len(self.node_list)
-                layer_stack.append(node)
-                self.node_list.append(node)
-            elif token.type == "ENDJOINT":
-                end_joint_encounter = True
-                node = BVHNode()
-                node.assign_parent(layer_stack[-1])
-                node.joint_name = "Dummy"
-                layer_stack.append(node)
-            elif token.type == "LPAREN":
-                pass
-            elif token.type == "RPAREN":
-                if end_joint_encounter == True:
-                    layer_stack[-1].parent.rest_tail_world = layer_stack[-1].parent.rest_head_world + layer_stack[
-                        -1].rest_head_local
-                    layer_stack[-1].parent.rest_tail_local = layer_stack[-1].parent.rest_head_local + layer_stack[
-                        -1].rest_head_local
-                    end_joint_encounter = False
-                layer_stack.pop()
-            elif token.type == "MOTION":
-                motion = Motion()
-                self.motion_list.append(motion)
-                motion.parse_motion(bvh_lexer, self.joint_parameter_amount)
-            else:
-                print("Unidentified token: ", token)
-
-        # Now set the tip of each bvh_node
-        for bvh_node in self.node_list:
-            if bvh_node.rest_tail_world == None:
-                if len(bvh_node.children) == 0:
-                    # could just fail here, but rare BVH files have childless nodes
-                    bvh_node.rest_tail_world = Vector(bvh_node.rest_head_world)
-                    bvh_node.rest_tail_local = Vector(bvh_node.rest_head_local)
-                elif len(bvh_node.children) == 1:
-                    bvh_node.rest_tail_world = Vector(bvh_node.children[0].rest_head_world)
-                    bvh_node.rest_tail_local = bvh_node.rest_head_local + bvh_node.children[0].rest_head_local
+                if token.type == "HIERARCHY":
+                    print('This is a BVH file')
+                elif token.type == "ROOT":
+                    node = BVHNode()
+                    node.parse_joint_name(bvh_lexer)
+                    node.in_list_index = len(self.node_list)
+                    layer_stack.append(node)
+                    self.node_list.append(node)
+                elif token.type == "OFFSET":
+                    layer_stack[-1].parse_offset(bvh_lexer)
+                elif token.type == "CHANNELS":
+                    joint_parameter_amount = layer_stack[-1].parse_channel_layout(bvh_lexer,
+                                                                                  self.joint_parameter_amount)
+                    self.joint_parameter_amount += joint_parameter_amount
+                elif token.type == "JOINT":
+                    node = BVHNode()
+                    node.assign_parent(layer_stack[-1])
+                    layer_stack[-1].add_child(node)
+                    node.parse_joint_name(bvh_lexer)
+                    node.in_list_index = len(self.node_list)
+                    layer_stack.append(node)
+                    self.node_list.append(node)
+                elif token.type == "ENDJOINT":
+                    end_joint_encounter = True
+                    node = BVHNode()
+                    node.assign_parent(layer_stack[-1])
+                    node.joint_name = "Dummy"
+                    layer_stack.append(node)
+                elif token.type == "LPAREN":
+                    pass
+                elif token.type == "RPAREN":
+                    if end_joint_encounter == True:
+                        layer_stack[-1].parent.rest_tail_world = layer_stack[-1].parent.rest_head_world + layer_stack[
+                            -1].rest_head_local
+                        layer_stack[-1].parent.rest_tail_local = layer_stack[-1].parent.rest_head_local + layer_stack[
+                            -1].rest_head_local
+                        end_joint_encounter = False
+                    layer_stack.pop()
+                elif token.type == "MOTION":
+                    motion = Motion()
+                    self.motion = motion
+                    motion.parse_motion(bvh_lexer, self.joint_parameter_amount)
                 else:
-                    # allow this, see above
-                    # if not bvh_node.children:
-                    #	raise Exception("bvh node has no end and no children. bad file")
+                    print("Unidentified token: ", token)
 
-                    # Removed temp for now
-                    rest_tail_world = Vector((0.0, 0.0, 0.0))
-                    rest_tail_local = Vector((0.0, 0.0, 0.0))
-                    for bvh_node_child in bvh_node.children:
-                        rest_tail_world += bvh_node_child.rest_head_world
-                        rest_tail_local += bvh_node_child.rest_head_local
+            # Now set the tip of each bvh_node
+            for bvh_node in self.node_list:
+                if bvh_node.rest_tail_world == None:
+                    if len(bvh_node.children) == 0:
+                        # could just fail here, but rare BVH files have childless nodes
+                        bvh_node.rest_tail_world = Vector(bvh_node.rest_head_world)
+                        bvh_node.rest_tail_local = Vector(bvh_node.rest_head_local)
+                    elif len(bvh_node.children) == 1:
+                        bvh_node.rest_tail_world = Vector(bvh_node.children[0].rest_head_world)
+                        bvh_node.rest_tail_local = bvh_node.rest_head_local + bvh_node.children[0].rest_head_local
+                    else:
+                        # allow this, see above
+                        # if not bvh_node.children:
+                        #	raise Exception("bvh node has no end and no children. bad file")
 
-                    bvh_node.rest_tail_world = rest_tail_world * (1.0 / len(bvh_node.children))
-                    bvh_node.rest_tail_local = rest_tail_local * (1.0 / len(bvh_node.children))
+                        # Removed temp for now
+                        rest_tail_world = Vector((0.0, 0.0, 0.0))
+                        rest_tail_local = Vector((0.0, 0.0, 0.0))
+                        for bvh_node_child in bvh_node.children:
+                            rest_tail_world += bvh_node_child.rest_head_world
+                            rest_tail_local += bvh_node_child.rest_head_local
 
-            # Make sure tail isn't the same location as the head.
-            if (bvh_node.rest_tail_local - bvh_node.rest_head_local).length <= 0.001:
-                print("\tzero length node found:", bvh_node.joint_name)
-                bvh_node.rest_tail_local.y = bvh_node.rest_tail_local.y + 1.0 / 10
-                bvh_node.rest_tail_world.y = bvh_node.rest_tail_world.y + 1.0 / 10
+                        bvh_node.rest_tail_world = rest_tail_world * (1.0 / len(bvh_node.children))
+                        bvh_node.rest_tail_local = rest_tail_local * (1.0 / len(bvh_node.children))
+
+                # Make sure tail isn't the same location as the head.
+                if (bvh_node.rest_tail_local - bvh_node.rest_head_local).length <= 0.001:
+                    print("\tzero length node found:", bvh_node.joint_name)
+                    bvh_node.rest_tail_local.y = bvh_node.rest_tail_local.y + 1.0 / 10
+                    bvh_node.rest_tail_world.y = bvh_node.rest_tail_world.y + 1.0 / 10
 
     def add_motion(self, bvh_filename):
         bvh_lexer = bvh_lex.BVHLexer()
@@ -510,10 +583,30 @@ class BVHParser:
 
             if token.type == "MOTION":
                 motion = Motion()
-                self.motion_list.append(motion)
+                self.motion = motion
                 motion.parse_motion(bvh_lexer, self.node_list)
             else:
                 print("Unidentified token")
+
+    def compare_to(self, other_parser):
+        if self.joint_parameter_amount != other_parser.joint_parameter_amount:
+            return False
+        if len(self.node_list) != len(other_parser.node_list):
+            return False
+        for i in range(len(self.node_list)):
+            # compare node
+            if self.node_list[i].compare_to(other_parser.node_list[i]) == False:
+                return False
+        return True
+
+    def clone(self):
+        new_parser = BVHParser()
+        new_parser.node_list = BVHNode.clone_list(self.node_list)
+        new_parser.joint_parameter_amount = self.joint_parameter_amount
+        new_parser.motion = self.motion.clone()
+        new_parser.name = "" + self.name
+        return new_parser
+
 
 def bvh_node_dict2armature(
         context,
@@ -622,7 +715,8 @@ def bvh_node_dict2armature(
     action = bpy.data.actions.new(name=bvh_name)
     arm_ob.animation_data.action = action
 
-    bvh_parser.motion_list[0].apply_motion_on_armature(context, bvh_parser.node_list, arm_ob, frame_start, global_matrix, True)
+    bvh_parser.motion.apply_motion_on_armature(context, bvh_parser.node_list, arm_ob, frame_start,
+                                               global_matrix, True)
 
     return arm_ob
 
