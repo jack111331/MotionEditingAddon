@@ -236,6 +236,7 @@ class Motion:
             frame.parse_frame(bvh_lex, joint_parameter_amount)
             self.frame_list.append(frame)
 
+    # Should ensure the root_transform_matrix_list is already in local bvh coodinate system
     def generate_root_pos_and_orientation(self, node_list, root_transform_matrix_list=None):
         aggregate_frame = AggregateFrame()
         aggregate_frame.assign_node_list(node_list)
@@ -263,6 +264,7 @@ class Motion:
             root_pos_and_orientation_list.append(list(root_node.rest_head_world[:]) + orientation_euler_angle)
         return root_pos_and_orientation_list
 
+    # Should ensure the root_transform_matrix_list is already in local bvh coodinate system
     def generate_all_node_pos_and_orientation(self, bvh_parser, root_transform_matrix_list):
         new_motion = Motion()
         new_motion.frame_time = self.frame_time
@@ -293,13 +295,14 @@ class Motion:
                 rotation_matrix = euler.to_matrix().to_4x4()
 
                 if top.in_list_index == 0:
-                    top.model_matrix = root_transform_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
+                    top.model_matrix = offset_matrix @ translation_matrix @ rotation_matrix @ root_transform_matrix
                 else:
-                    top.model_matrix = top.parent.model_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
+                    top.model_matrix = offset_matrix @ translation_matrix @ rotation_matrix @ top.parent.model_matrix
 
                 top.rest_head_world = top.model_matrix @ Vector((0.0, 0.0, 0.0))
                 top.rest_tail_world = top.model_matrix @ Vector(top.rest_tail_local - top.rest_head_local)
 
+                # get bvh local euler angle
                 orientation_euler_angle = (root_transform_matrix @ rotation_matrix).to_euler(top.rot_order_str[::-1])
                 orientation_euler_angle = [degrees(angle) for angle in orientation_euler_angle]
                 new_frame.motion_parameter_list[
@@ -308,6 +311,53 @@ class Motion:
 
             new_motion.frame_list.append(new_frame)
         return new_motion
+
+    def generate_all_node_pos_and_orientation_in_world(self, bvh_parser, target_node_dict, root_transform_matrix_list=None):
+        world_loc_and_rot_list = []
+        new_node_list = BVHNode.clone_list(bvh_parser.node_list)
+        num_frame = len(self.frame_list)
+
+        aggregate_frame = AggregateFrame()
+        aggregate_frame.assign_node_list(new_node_list)
+
+        for frame_i in range(num_frame):
+            world_loc_and_rot = [[]] * 3
+            root_transform_matrix = Matrix.Identity(4)
+            if root_transform_matrix_list != None:
+                root_transform_matrix = root_transform_matrix_list[frame_i]
+            aggregate_frame.assign_frame(self.frame_list[frame_i])
+            generate_queue = [new_node_list[0]]
+            while len(generate_queue) != 0:
+                top = generate_queue[0]
+                generate_queue.pop(0)
+                for children in top.children:
+                    generate_queue.append(children)
+
+                offset_matrix = Matrix.Translation(top.rest_head_local)
+                translation_matrix = Matrix.Translation(aggregate_frame.get_loc(top.in_list_index))
+                # radians
+                rot = aggregate_frame.get_rot(top.in_list_index)
+                euler = Euler(rot, top.rot_order_str[::-1])
+                rotation_matrix = euler.to_matrix().to_4x4()
+
+                if top.in_list_index == 0:
+                    top.model_matrix = root_transform_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
+                else:
+                    top.model_matrix = top.parent.model_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
+
+                top.rest_head_world = top.model_matrix @ Vector((0.0, 0.0, 0.0))
+                top.rest_tail_world = top.model_matrix @ Vector(top.rest_tail_local - top.rest_head_local)
+
+                #  get bvh world euler angle
+                orientation_euler_angle = top.model_matrix.to_euler(top.rot_order_str[::-1])
+                orientation_euler_angle = [angle for angle in orientation_euler_angle]
+
+                if top.in_list_index in target_node_dict:
+                    world_loc_and_rot[target_node_dict[top.in_list_index]] = list(top.rest_head_world[:]) + orientation_euler_angle
+
+            world_loc_and_rot_list.append(world_loc_and_rot)
+        return world_loc_and_rot_list
+
 
     def apply_motion_on_armature(self, context, bvh_nodes_list, arm_ob, frame_start, global_matrix, initialize=False):
         # Should select object first.....
@@ -674,6 +724,16 @@ class BVHParser:
         new_parser.motion = self.motion.clone()
         new_parser.name = "" + self.name
         return new_parser
+
+    def get_blender_world_to_bvh_world_transform_matrix(self, bone_index):
+        arm_ob = bpy.data.objects[self.name]
+        arm_data = arm_ob.data
+        bone_name = self.node_list[bone_index].in_edit_bone_name
+        rest_bone = arm_data.bones[bone_name]
+        bone_rest_matrix = rest_bone.matrix_local.to_4x4()
+
+        bone_rest_matrix = Matrix(bone_rest_matrix)
+        return bone_rest_matrix
 
 
 def bvh_node_dict2armature(

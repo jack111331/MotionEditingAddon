@@ -2,6 +2,7 @@ import bpy
 from bpy_extras.io_utils import ImportHelper, orientation_helper, axis_conversion
 from bpy.props import BoolProperty
 from .BVH import concatenate_motion
+from .BVH import footskate_clean
 import subprocess
 import os
 
@@ -125,6 +126,7 @@ class PathAnimationGeneratePanel(bpy.types.Panel):
 
         # draw concatenate motion panel
         concatenate_motion.draw(context, layout)
+        footskate_clean.draw(context, layout)
 
 
 
@@ -144,6 +146,8 @@ def register():
     bpy.types.Scene.use_origin_motion = BoolProperty(name="use_origin_motion")
 
     concatenate_motion.register()
+    footskate_clean.register()
+
 
 
 def unregister():
@@ -153,6 +157,7 @@ def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
 
     concatenate_motion.unregister()
+    footskate_clean.unregister()
 
 
 if __name__ == "__main__":

@@ -220,15 +220,17 @@ class MotionPathAnimation:
         self.initial_to_new_path_transform_matrix_list = []
         init_curve = self.initial_path.data.splines[0].points.values()
         new_curve = self.new_path.data.splines[0].points.values()
+        to_bvh_coordinate_system_matrix = self.bvh_parser.get_blender_world_to_bvh_world_transform_matrix(0)
+
         for i in range(self.bvh_parser.motion.frame_amount):
             p0 = init_curve[i].co.xyz
             p = new_curve[i].co.xyz
 
-            init_translation_matrix = Matrix.Translation(p0)
-            new_translation_matrix = Matrix.Translation(p)
+            init_translation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Translation(p0)
+            new_translation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Translation(p)
 
-            initial_rotation_matrix = Matrix.Identity(4)
-            new_rotation_matrix = Matrix.Identity(4)
+            initial_rotation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Identity(4)
+            new_rotation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Identity(4)
             if i == 0:
                 f0 = init_curve[i + 1].co.xyz - init_curve[i].co.xyz
                 f = new_curve[i + 1].co.xyz - new_curve[i].co.xyz
@@ -237,9 +239,9 @@ class MotionPathAnimation:
                 f = new_curve[i].co.xyz - new_curve[i - 1].co.xyz
 
             if f0.length > 0.001:
-                initial_rotation_matrix = compute_line_orientation(f0)
+                initial_rotation_matrix = to_bvh_coordinate_system_matrix @ compute_line_orientation(f0)
             if f.length > 0.001:
-                new_rotation_matrix = compute_line_orientation(f)
+                new_rotation_matrix = to_bvh_coordinate_system_matrix @ compute_line_orientation(f)
 
             # Transform to new
             transform_matrix = new_translation_matrix @ new_rotation_matrix \
