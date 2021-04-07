@@ -1,6 +1,6 @@
 from . import bvh_lex
 import bpy
-from math import radians, degrees
+from math import radians
 from mathutils import Vector, Matrix, Euler
 import os
 
@@ -75,8 +75,8 @@ class BVHNode:
     def parse_joint_name(self, bvh_lex):
         self.joint_name = bvh_lex.token().value
 
-    def parse_offset(self, bvh_lex):
-        self.rest_head_local = Vector((bvh_lex.token().value, bvh_lex.token().value, bvh_lex.token().value))
+    def parse_offset(self, bvh_lex, to_blender_matrix):
+        self.rest_head_local = to_blender_matrix.to_translation() + Vector((bvh_lex.token().value, bvh_lex.token().value, bvh_lex.token().value))
         if self.parent == None:
             self.rest_head_world = self.rest_head_local
         else:
@@ -84,13 +84,17 @@ class BVHNode:
 
     def parse_channel_layout(self, bvh_lex, joint_parameter_amount):
         self.channels = bvh_lex.token().value
+        rotation_channel_list = []
         for i in range(self.channels):
             type = bvh_lex.token().type
             if type == "XROTATION":
+                rotation_channel_list.append(joint_parameter_amount+i)
                 self.rot_order_str += "X"
             elif type == "YROTATION":
+                rotation_channel_list.append(joint_parameter_amount+i)
                 self.rot_order_str += "Y"
             elif type == "ZROTATION":
+                rotation_channel_list.append(joint_parameter_amount+i)
                 self.rot_order_str += "Z"
             for j in range(len(BVHNode.channel_layout)):
                 if type == BVHNode.channel_layout[j]:
@@ -99,12 +103,11 @@ class BVHNode:
         self.in_motion_start_idx = joint_parameter_amount
         if self.rot_order_str == "":
             self.rot_order_str = "XYZ"
-        print(self.joint_name, self.rot_order_str)
         self.has_loc = self.channel_layout_assign[0] != -1 or self.channel_layout_assign[1] != -1 or \
                        self.channel_layout_assign[2] != -1
         self.has_rot = self.channel_layout_assign[3] != -1 or self.channel_layout_assign[4] != -1 or \
                        self.channel_layout_assign[5] != -1
-        return self.channels
+        return self.channels, rotation_channel_list
 
     def compare_to(self, other_node):
         if other_node.joint_name != self.joint_name:
@@ -154,7 +157,7 @@ class AggregateFrame:
 
         return [x, y, z]
 
-    def get_rot(self, bone_index, ret_redians=True):
+    def get_rot(self, bone_index):
         channel = self.frame.motion_parameter_list[
                   self.node_list[bone_index].in_motion_start_idx:self.node_list[bone_index].in_motion_start_idx +
                                                                  self.node_list[bone_index].channels]
@@ -166,10 +169,7 @@ class AggregateFrame:
         if self.node_list[bone_index].channel_layout_assign[5] != -1:
             z = channel[self.node_list[bone_index].channel_layout_assign[5]]
 
-        if ret_redians == True:
-            return [radians(x), radians(y), radians(z)]
-        else:
-            return [x, y, z]
+        return [x, y, z]
 
     def to_channel(self, bone_index, loc, rot):
         channel = [0] * self.node_list[bone_index].channels
@@ -202,9 +202,61 @@ class Frame:
     def __init__(self):
         self.motion_parameter_list = []
 
-    def parse_frame(self, bvh_lex, joint_parameter_amount):
+    def parse_frame(self, bvh_lex, joint_parameter_amount, rotation_channel_list):
         for i in range(joint_parameter_amount):
-            self.motion_parameter_list.append(bvh_lex.token().value)
+            if i in rotation_channel_list:
+                self.motion_parameter_list.append(bvh_lex.token().value)
+            else:
+                self.motion_parameter_list.append(radians(bvh_lex.token().value))
+
+    def get_content(self, node_list, bone_index, channel_list):
+        in_motion_start_idx = node_list[bone_index].in_motion_start_idx
+        channels = node_list[bone_index].channels
+        channel_content = self.motion_parameter_list[in_motion_start_idx:in_motion_start_idx+channels]
+        extract_channel_content = []
+        for channel in channel_list:
+            if node_list[bone_index].channel_layout_assign[channel] != -1:
+                extract_channel_content.append(channel_content[node_list[bone_index].channel_layout_assign[channel]])
+            else:
+                extract_channel_content.append(0.0)
+
+        return extract_channel_content
+
+    def get_loc(self, node_list, bone_index):
+        return self.get_content(node_list, bone_index, [0, 1, 2])
+
+    def get_rot(self, node_list, bone_index):
+        return self.get_content(node_list, bone_index, [3, 4, 5])
+
+    def set_content(self, node_list, bone_index, channel_list, content_list):
+        if len(channel_list) != len(channel_list):
+            print("[ERROR] Fail to set content in frame")
+        in_motion_start_idx = node_list[bone_index].in_motion_start_idx
+        for i in range(len(channel_list)):
+            channel_pos = in_motion_start_idx+node_list[bone_index].channel_layout_assign[channel_list[i]]
+            if node_list[bone_index].channel_layout_assign[node_list[bone_index].channel_layout_assign[channel_list[i]]] != -1:
+                self.motion_parameter_list[channel_pos] = content_list[i]
+            else:
+                self.motion_parameter_list[channel_pos] = 0.0
+
+    def set_loc(self, node_list, bone_index, loc):
+        return self.set_content(node_list, bone_index, [0, 1, 2], loc)
+
+    def set_rot(self, node_list, bone_index, rot):
+        return self.set_content(node_list, bone_index, [3, 4, 5], rot)
+
+    def convert_to_blender(self, node_list, to_blender_matrix):
+        for node in node_list:
+            origin_loc = self.get_loc(node_list, node.in_list_index)
+            to_blender_translation = to_blender_matrix.to_translation()
+            to_blender_loc = [to_blender_translation[i] + origin_loc[i] for i in range(len(origin_loc))]
+            self.set_loc(node_list, node.in_list_index, to_blender_loc)
+
+            origin_rot = self.get_rot(node_list, node.in_list_index)
+            to_blender_rot = Euler(origin_rot, "ZYX")
+            to_blender_rot.rotate(to_blender_matrix)
+            to_blender_rot = [to_blender_rot.x, to_blender_rot.y, to_blender_rot.z]
+            self.set_rot(node_list, node.in_list_index, to_blender_rot)
 
     def clone(self):
         new_frame = Frame()
@@ -225,7 +277,7 @@ class Motion:
         self.frame_amount = 0
         self.frame_time = 0.0
 
-    def parse_motion(self, bvh_lex, joint_parameter_amount):
+    def parse_motion(self, bvh_lex, joint_parameter_amount, rotation_channel_list, to_blender_matrix, node_list):
         while True:
             token = bvh_lex.token()
             if token.type == "FRAMES":
@@ -236,35 +288,33 @@ class Motion:
 
         for i in range(self.frame_amount):
             frame = Frame()
-            frame.parse_frame(bvh_lex, joint_parameter_amount)
+            frame.parse_frame(bvh_lex, joint_parameter_amount, rotation_channel_list)
+            frame.convert_to_blender(node_list, to_blender_matrix)
             self.frame_list.append(frame)
 
     # Should ensure the root_transform_matrix_list is already in local bvh coodinate system
     def generate_root_pos_and_orientation(self, node_list, root_transform_matrix_list=None):
-        aggregate_frame = AggregateFrame()
-        aggregate_frame.assign_node_list(node_list)
-
         root_pos_and_orientation_list = []
         root_node = node_list[0].clone()
-        num_frame = len(self.frame_list)
-        for frame_i in range(num_frame):
+        for frame_i in range(len(self.frame_list)):
             root_transform_matrix = Matrix.Identity(4)
-            if root_transform_matrix_list != None:
+            if root_transform_matrix_list != None and root_transform_matrix_list[frame_i] != None:
                 root_transform_matrix = root_transform_matrix_list[frame_i]
 
-            aggregate_frame.assign_frame(self.frame_list[frame_i])
             offset_matrix = Matrix.Translation(root_node.rest_head_local)
-            translation_matrix = Matrix.Translation(aggregate_frame.get_loc(0))
-            euler = Euler(aggregate_frame.get_rot(0), root_node.rot_order_str[::-1])
+            translation_matrix = Matrix.Translation(self.frame_list[frame_i].get_loc(node_list, 0))
+            euler = Euler(self.frame_list[frame_i].get_rot(node_list, 0), "ZYX")
             rotation_matrix = euler.to_matrix().to_4x4()
 
+            # First done transformation on local coordinate system, then transform it to global coordinate system
             root_node.model_matrix = root_transform_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
 
-            root_node.rest_head_world = root_node.model_matrix @ Vector((0.0, 0.0, 0.0))
+            root_node.rest_head_world = root_node.model_matrix.to_translation()
 
-            orientation_euler_angle = root_node.model_matrix.to_euler(root_node.rot_order_str[::-1])
-            orientation_euler_angle = [degrees(angle) for angle in orientation_euler_angle]
+            orientation_euler_angle = root_node.model_matrix.to_euler("ZYX")
+            orientation_euler_angle = [angle for angle in orientation_euler_angle]
             root_pos_and_orientation_list.append(list(root_node.rest_head_world[:]) + orientation_euler_angle)
+
         return root_pos_and_orientation_list
 
     # Should ensure the root_transform_matrix_list is already in local bvh coodinate system
@@ -307,7 +357,7 @@ class Motion:
 
                 # get bvh local euler angle
                 orientation_euler_angle = (root_transform_matrix @ rotation_matrix).to_euler(top.rot_order_str[::-1])
-                orientation_euler_angle = [degrees(angle) for angle in orientation_euler_angle]
+                orientation_euler_angle = [angle for angle in orientation_euler_angle]
                 new_frame.motion_parameter_list[
                 top.in_motion_start_idx:top.in_motion_start_idx + top.channels] = aggregate_frame.to_channel(
                     top.in_list_index, list(top.rest_head_world[:]), orientation_euler_angle)
@@ -338,7 +388,6 @@ class Motion:
 
                 offset_matrix = Matrix.Translation(top.rest_head_local)
                 translation_matrix = Matrix.Translation(aggregate_frame.get_loc(top.in_list_index))
-                # radians
                 rot = aggregate_frame.get_rot(top.in_list_index)
                 euler = Euler(rot, top.rot_order_str[::-1])
                 rotation_matrix = euler.to_matrix().to_4x4()
@@ -362,7 +411,7 @@ class Motion:
         return world_loc_and_rot_list
 
 
-    def apply_motion_on_armature(self, context, bvh_nodes_list, arm_ob, frame_start, global_matrix, initialize=False):
+    def apply_motion_on_armature(self, context, bvh_nodes_list, arm_ob, frame_start):
         # Should select object first.....
         arm_ob.select_set(True)
         context.view_layer.objects.active = arm_ob
@@ -372,11 +421,6 @@ class Motion:
         pose_bones = pose.bones
         action = arm_ob.animation_data.action
         arm_data = arm_ob.data
-
-        if initialize == False:
-            # Recover to original pose coordinate system
-            arm_ob.matrix_world = global_matrix.inverted()
-            bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
         # Replace the bvh_node.temp
         # With a tuple  (pose_bone, armature_bone, bone_rest_matrix, bone_rest_matrix_inv)
@@ -412,8 +456,6 @@ class Motion:
         # print("bvh_frame_time = %f, dt = %f, num_frame = %d"
         #      % (bvh_frame_time, dt, num_frame]))
 
-        aggregate_frame = AggregateFrame()
-        aggregate_frame.assign_node_list(bvh_nodes_list)
         for i, bvh_node in enumerate(bvh_nodes_list):
             pose_bone, bone_rest_matrix, bone_rest_matrix_inv = bvh_node.temp
 
@@ -424,13 +466,11 @@ class Motion:
 
                 location = [(0.0, 0.0, 0.0)] * num_frame
                 for frame_i in range(num_frame):
-                    aggregate_frame.assign_frame(self.frame_list[frame_i])
-                    bvh_loc = aggregate_frame.get_loc(i)
+                    bvh_loc = self.frame_list[frame_i].get_loc(bvh_nodes_list, i)
 
                     bone_translate_matrix = Matrix.Translation(
                         Vector(bvh_loc) - bvh_node.rest_head_local)
-                    location[frame_i] = (bone_rest_matrix_inv @
-                                         bone_translate_matrix).to_translation()
+                    location[frame_i] = bone_translate_matrix.to_translation()
 
                 # For each location x, y, z.
                 for axis_i in range(3):
@@ -453,25 +493,20 @@ class Motion:
                 data_path = ('pose.bones["%s"].rotation_euler' %
                              pose_bone.name)
 
-                prev_euler = Euler((0.0, 0.0, 0.0))
                 for frame_i in range(num_frame):
-                    aggregate_frame.assign_frame(self.frame_list[frame_i])
-                    bvh_rot = aggregate_frame.get_rot(i)
+                    bvh_rot = self.frame_list[frame_i].get_rot(bvh_nodes_list, i)
 
                     # apply rotation order and convert to XYZ
                     # note that the rot_order_str is reversed.
-                    euler = Euler(bvh_rot, bvh_node.rot_order_str[::-1])
+                    euler = Euler(bvh_rot, "ZYX")
 
                     bone_rotation_matrix = euler.to_matrix().to_4x4()
                     bone_rotation_matrix = (
-                            bone_rest_matrix_inv @
-                            bone_rotation_matrix @
-                            bone_rest_matrix
+                            bone_rotation_matrix
                     )
 
                     rotate[frame_i] = bone_rotation_matrix.to_euler(
-                        pose_bone.rotation_mode, prev_euler)
-                    prev_euler = rotate[frame_i]
+                        pose_bone.rotation_mode)
 
                 # For each euler angle x, y, z (or quaternion w, x, y, z).
                 for axis_i in range(len(rotate[0])):
@@ -492,10 +527,6 @@ class Motion:
             for bez in cu.keyframe_points:
                 bez.interpolation = 'LINEAR'
 
-        # finally apply matrix
-        arm_ob.matrix_world = global_matrix
-        bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
-
     def clone(self):
         new_motion = Motion()
         new_motion.frame_list = Frame.clone_list(self.frame_list)
@@ -509,10 +540,10 @@ class Motion:
         aggregate_frame.assign_node_list(bvh_parser.node_list)
         aggregate_frame.assign_frame(self.frame_list[-1])
         last_loc = aggregate_frame.get_loc(0)
-        last_rot = aggregate_frame.get_rot(0, ret_redians=False)
+        last_rot = aggregate_frame.get_rot(0)
         aggregate_frame.assign_frame(concatenate_motion.frame_list[0])
         new_loc = aggregate_frame.get_loc(0)
-        new_rot = aggregate_frame.get_rot(0, ret_redians=False)
+        new_rot = aggregate_frame.get_rot(0)
 
         # drag concatenate motion to current motion
         offset_loc = [last_loc[i] - new_loc[i] for i in range(len(new_loc))]
@@ -544,10 +575,10 @@ class Motion:
             # calculate each node's offset inbetween concatenate frame
             aggregate_frame.assign_frame(self.frame_list[concatenate_frame])
             previous_loc = aggregate_frame.get_loc(i)
-            previous_rot = aggregate_frame.get_rot(i, ret_redians=False)
+            previous_rot = aggregate_frame.get_rot(i)
             aggregate_frame.assign_frame(self.frame_list[concatenate_frame + 1])
             new_loc = aggregate_frame.get_loc(i)
-            new_rot = aggregate_frame.get_rot(i, ret_redians=False)
+            new_rot = aggregate_frame.get_rot(i)
             offset_loc = [(new_loc[i] - previous_loc[i]) for i in range(len(new_loc))]
             offset_rot = [(new_rot[i] - previous_rot[i]) for i in range(len(new_rot))]
             offset_loc_list.append(offset_loc)
@@ -561,7 +592,7 @@ class Motion:
                     offset_rot = [smooth_factor * offset_rot_list[i][j] for j in range(len(offset_rot_list[i]))]
                     aggregate_frame.assign_frame(self.frame_list[frame_i])
                     if i == 2:
-                        original_rot = aggregate_frame.get_rot(i, ret_redians=False)
+                        original_rot = aggregate_frame.get_rot(i)
                     in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
                     channels = bvh_parser.node_list[i].channels
                     self.frame_list[frame_i].motion_parameter_list[
@@ -584,10 +615,12 @@ class Motion:
 
 class BVHParser:
 
-    def __init__(self, bvh_filename=""):
+    def __init__(self, bvh_filename="", to_blender_matrix=None):
         self.node_list = []
         self.joint_parameter_amount = 0
         self.motion = None
+        self.rotation_channel_list = []
+        self.to_blender_matrix = to_blender_matrix
         self.name = os.path.splitext(os.path.basename(bvh_filename))[0]
 
         if len(bvh_filename) != 0:
@@ -610,21 +643,22 @@ class BVHParser:
                 elif token.type == "ROOT":
                     node = BVHNode()
                     node.parse_joint_name(bvh_lexer)
-                    node.in_list_index = len(self.node_list)
+                    node.in_list_index = 0
                     layer_stack.append(node)
                     self.node_list.append(node)
                 elif token.type == "OFFSET":
-                    layer_stack[-1].parse_offset(bvh_lexer)
+                    layer_stack[-1].parse_offset(bvh_lexer, to_blender_matrix)
                 elif token.type == "CHANNELS":
-                    joint_parameter_amount = layer_stack[-1].parse_channel_layout(bvh_lexer,
+                    joint_parameter_amount, rotation_channel_list = layer_stack[-1].parse_channel_layout(bvh_lexer,
                                                                                   self.joint_parameter_amount)
                     self.joint_parameter_amount += joint_parameter_amount
+                    self.rotation_channel_list.append(rotation_channel_list)
                 elif token.type == "JOINT":
                     node = BVHNode()
                     node.assign_parent(layer_stack[-1])
                     layer_stack[-1].add_child(node)
                     node.parse_joint_name(bvh_lexer)
-                    node.in_list_index = len(self.node_list)
+                    node.in_list_index = self.node_list[-1].in_list_index+1
                     layer_stack.append(node)
                     self.node_list.append(node)
                 elif token.type == "ENDJOINT":
@@ -646,7 +680,7 @@ class BVHParser:
                 elif token.type == "MOTION":
                     motion = Motion()
                     self.motion = motion
-                    motion.parse_motion(bvh_lexer, self.joint_parameter_amount)
+                    motion.parse_motion(bvh_lexer, self.joint_parameter_amount, self.rotation_channel_list, to_blender_matrix, self.node_list)
                 else:
                     print("Unidentified token: ", token)
 
@@ -680,26 +714,6 @@ class BVHParser:
                     print("\tzero length node found:", bvh_node.joint_name)
                     bvh_node.rest_tail_local.y = bvh_node.rest_tail_local.y + 1.0 / 10
                     bvh_node.rest_tail_world.y = bvh_node.rest_tail_world.y + 1.0 / 10
-
-    def add_motion(self, bvh_filename):
-        bvh_lexer = bvh_lex.BVHLexer()
-        try:
-            with open(bvh_filename) as f:
-                bvh_lexer.input(f.read())
-        except IndexError:
-            print('Can\'t open bvh file')
-
-        while True:
-            token = bvh_lexer.token()
-            if token == None:
-                break
-
-            if token.type == "MOTION":
-                motion = Motion()
-                self.motion = motion
-                motion.parse_motion(bvh_lexer, self.node_list)
-            else:
-                print("Unidentified token")
 
     def compare_to(self, other_parser):
         if self.joint_parameter_amount != other_parser.joint_parameter_amount:
@@ -735,8 +749,7 @@ def bvh_node_dict2armature(
         context,
         bvh_name,
         bvh_parser,
-        frame_start=1,
-        global_matrix=None
+        frame_start=1
 ):
     if frame_start < 1:
         frame_start = 1
@@ -838,7 +851,7 @@ def bvh_node_dict2armature(
     for bvh_node in bvh_nodes_list:
         bone_name = bvh_node.in_edit_bone_name  # may not be the same name as the bvh_node, could have been shortened.
         pose_bone = pose_bones[bone_name]
-        pose_bone.rotation_mode = bvh_node.rot_order_str
+        pose_bone.rotation_mode = "XYZ"
 
     context.view_layer.update()
 
@@ -846,19 +859,18 @@ def bvh_node_dict2armature(
     action = bpy.data.actions.new(name=bvh_name)
     arm_ob.animation_data.action = action
 
-    bvh_parser.motion.apply_motion_on_armature(context, bvh_parser.node_list, arm_ob, frame_start,
-                                               global_matrix, True)
+    bvh_parser.motion.apply_motion_on_armature(context, bvh_parser.node_list, arm_ob, frame_start)
 
     return arm_ob
 
 
-def load(context, filepath, global_matrix=None):
-    parser = BVHParser(filepath)
+def load(context, filepath, global_matrix):
+    parser = BVHParser(filepath, global_matrix)
 
     scene = context.scene
     frame_orig = scene.frame_current
     bvh_name = bpy.path.display_name_from_filepath(filepath)
-    bvh_node_dict2armature(context, bvh_name, parser, global_matrix=global_matrix)
+    bvh_node_dict2armature(context, bvh_name, parser)
     context.scene.frame_set(frame_orig)
     return parser
 

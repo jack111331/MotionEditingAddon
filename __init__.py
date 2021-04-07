@@ -6,17 +6,22 @@ from .BVH import footskate_clean
 import subprocess
 import os
 
+
 # Install dependency in blender environment
-py_exec = bpy.app.binary_path_python
-if not os.path.exists(os.path.join(str(py_exec)[:-14] + 'lib', 'scipy')) or not os.path.exists(os.path.join(str(py_exec)[:-14] + 'lib', 'sympy')):
-    print('Installing dependency')
-    # ensure pip is installed
-    subprocess.call([str(py_exec), "-m", "ensurepip", "--user"])
-    # update pip
-    subprocess.call([str(py_exec), "-m", "pip", "install", "--upgrade", "pip"])
-    # install packages
-    subprocess.call([str(py_exec), "-m", "pip", "install", f"--target={str(py_exec)[:-14]}" + "lib", "scipy"])
-    subprocess.call([str(py_exec), "-m", "pip", "install", f"--target={str(py_exec)[:-14]}" + "lib", "sympy"])
+def check_deps(deps_list):
+    py_exec = bpy.app.binary_path_python
+    for deps in deps_list:
+        if not os.path.exists(os.path.join(str(py_exec)[:-14] + 'lib', deps)):
+            print('Installing dependency')
+            # ensure pip is installed
+            subprocess.call([str(py_exec), "-m", "ensurepip", "--user"])
+            # update pip
+            subprocess.call([str(py_exec), "-m", "pip", "install", "--upgrade", "pip"])
+            # install packages
+            subprocess.call([str(py_exec), "-m", "pip", "install", f"--target={str(py_exec)[:-14]}" + "lib", deps])
+
+
+check_deps(deps_list=["scipy", "sympy"])
 
 from .BVH import bvh, motion_editing
 
@@ -24,7 +29,7 @@ bl_info = {
     "name": "BVH parser and motion path editing",
     "author": "Edge",
     "version": (1, 0, 0),
-    "blender": (2, 81, 6),
+    "blender": (2, 83, 5),
     "location": "File > Import",
     "description": "import .bvh file",
     "warning": "",
@@ -91,11 +96,16 @@ class ApplyAnimation(bpy.types.Operator):
         arm_ob = bpy.data.objects[motion_path_animation.bvh_parser.name]
         if motion_path_animation != None:
             if context.scene.use_origin_motion == True:
-                motion_path_animation.bvh_parser.motion.apply_motion_on_armature(context, motion_path_animation.bvh_parser.node_list, arm_ob, 1, motion_path_animation.global_matrix)
+                motion_path_animation.bvh_parser.motion.apply_motion_on_armature(context,
+                                                                                 motion_path_animation.bvh_parser.node_list,
+                                                                                 arm_ob, 1)
             else:
-                motion_path_animation.new_motion_data.apply_motion_on_armature(context, motion_path_animation.bvh_parser.node_list, arm_ob, 1, motion_path_animation.global_matrix)
+                motion_path_animation.new_motion_data.apply_motion_on_armature(context,
+                                                                               motion_path_animation.bvh_parser.node_list,
+                                                                               arm_ob, 1)
 
         return {'FINISHED'}
+
 
 class PathAnimationGeneratePanel(bpy.types.Panel):
     bl_idname = "PATH_PT_ANIMATION_GENERATE"
@@ -129,7 +139,6 @@ class PathAnimationGeneratePanel(bpy.types.Panel):
         footskate_clean.draw(context, layout)
 
 
-
 # Only needed if you want to add into a dynamic menu
 def menu_func_import(self, context):
     self.layout.operator(BVHImport.bl_idname, text="Motion Path Editing(.bvh)")
@@ -147,7 +156,6 @@ def register():
 
     concatenate_motion.register()
     footskate_clean.register()
-
 
 
 def unregister():

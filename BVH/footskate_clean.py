@@ -1,6 +1,6 @@
 import bpy
 from mathutils import geometry, Vector, Matrix, Euler, Quaternion
-from math import degrees, acos, radians
+from math import acos
 from . import motion_editing
 from . import bvh
 
@@ -130,8 +130,7 @@ class FootSkateCleanOperator(bpy.types.Operator):
             arm_ob = bpy.data.objects[motion_path_animation.bvh_parser.name]
             motion_path_animation.new_motion_data.apply_motion_on_armature(context,
                                                                              motion_path_animation.bvh_parser.node_list,
-                                                                             arm_ob, 1,
-                                                                             motion_path_animation.global_matrix)
+                                                                             arm_ob, 1)
 
         return {"FINISHED"}
 
@@ -203,7 +202,6 @@ class FootSkateCleanOperator(bpy.types.Operator):
 
                     offset_matrix = Matrix.Translation(top.rest_head_local)
                     translation_matrix = Matrix.Translation(aggregate_frame.get_loc(top.in_list_index))
-                    # radians
                     rot = aggregate_frame.get_rot(top.in_list_index)
                     euler = Euler(rot, top.rot_order_str[::-1])
                     rotation_matrix = euler.to_matrix().to_4x4()
@@ -212,7 +210,6 @@ class FootSkateCleanOperator(bpy.types.Operator):
                     top.rest_tail_world = top.model_matrix @ Vector(top.rest_tail_local - top.rest_head_local)
                     orientation_euler_angle = rotation_matrix.to_euler(
                         top.rot_order_str[::-1])
-                    orientation_euler_angle = [degrees(angle) for angle in orientation_euler_angle]
 
                     in_motion_start_idx = animation.bvh_parser.node_list[top.in_list_index].in_motion_start_idx
                     channels = animation.bvh_parser.node_list[top.in_list_index].channels
