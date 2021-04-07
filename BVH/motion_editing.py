@@ -5,17 +5,52 @@ from ..bspline_regression.uniform_bspline import UniformBSpline
 from ..bspline_regression.fit_uniform_bspline import UniformBSplineLeastSquaresOptimiser
 import scipy.spatial
 import numpy as np
+import bisect
 
 from . import bvh
 
 
+def convert_to_arc_length(cubic_bspline_curve, u):
+    def calculate_distance(point_1, point_2):
+        velocity = np.asarray(point_1) - np.asarray(point_2)
+        return np.sqrt(velocity.dot(velocity))
+
+    total_distance = 0.0
+    for i in range(1, len(cubic_bspline_curve)):
+        total_distance += calculate_distance(cubic_bspline_curve[i], cubic_bspline_curve[i - 1])
+    scale = u[-1]
+    s = [0.0]
+    for i in range(1, len(cubic_bspline_curve)):
+        s.append(s[i-1] + (calculate_distance(cubic_bspline_curve[i], cubic_bspline_curve[i - 1]) / total_distance))
+
+    new_u = [0.0]
+    per_portion = 1 / len(cubic_bspline_curve)
+    current_portion = per_portion
+    for i in range(1, len(cubic_bspline_curve)-1):
+        # Find and interpolate t
+        left_idx = bisect.bisect_right(s, current_portion) - 1
+        if left_idx == len(u) - 1:
+            new_u.append(u[left_idx])
+        else:
+            right_idx = left_idx + 1
+            right_portion = (current_portion - s[left_idx]) / (s[right_idx] - s[left_idx])
+            new_u.append(u[left_idx] * (1.0 - right_portion) + u[right_idx] * right_portion)
+        current_portion = current_portion + per_portion
+    new_u.append(scale)
+    return new_u
+
+
 def create_poly_curve(context, collection, name, points, global_matrix):
     # create the Curve Datablock
-    curve_data = bpy.data.curves.new(name, type='CURVE')
-    curve_data.dimensions = '3D'
+    if name in bpy.data.curves.keys():
+        curve_data = bpy.data.curves[name]
+    else:
+        curve_data = bpy.data.curves.new(name, type='CURVE')
+        curve_data.dimensions = '3D'
     # curveData.resolution_u = 3
 
     # map coords to spline
+    curve_data.splines.clear()
     polyline = curve_data.splines.new('POLY')
     polyline.points.add(len(points) - 1)
 
@@ -97,6 +132,9 @@ def interpolate_cubic_bspline_curve(control_points, u):
 
 def create_cubic_bspline_curve(context, collection, control_points, name, u, global_matrix):
     cubic_bspline_curve = interpolate_cubic_bspline_curve(control_points, u)
+    # arc-length the curve and regenerate it
+    new_u = convert_to_arc_length(cubic_bspline_curve, u)
+    cubic_bspline_curve = interpolate_cubic_bspline_curve(control_points, new_u)
     return create_poly_curve(context, collection, name, cubic_bspline_curve, global_matrix)
 
 
@@ -144,7 +182,6 @@ class MotionPathAnimation:
         motion_path_animation.global_matrix = self.global_matrix
         MotionPathAnimation.path_animations.append(motion_path_animation)
         return motion_path_animation
-
 
     @classmethod
     def get_path_from_collection_name(cls, collection_name):
@@ -205,7 +242,6 @@ class MotionPathAnimation:
                                                           self.bvh_parser.name + ".control_points")
 
         c_points, self.u = solve_cubic_bspline(self.initial_motion_curve.data.splines[0].points.values())
-
         for i in range(len(c_points)):
             create_cube(self.control_point_collection, "c_" + str(i), c_points[i], self.global_matrix, 10.0)
 
@@ -220,17 +256,18 @@ class MotionPathAnimation:
         self.initial_to_new_path_transform_matrix_list = []
         init_curve = self.initial_path.data.splines[0].points.values()
         new_curve = self.new_path.data.splines[0].points.values()
-        to_bvh_coordinate_system_matrix = self.bvh_parser.get_blender_world_to_bvh_world_transform_matrix(0)
+
+        # to_bvh_coordinate_system_matrix = self.bvh_parser.get_blender_world_to_bvh_world_transform_matrix(0)
 
         for i in range(self.bvh_parser.motion.frame_amount):
             p0 = init_curve[i].co.xyz
             p = new_curve[i].co.xyz
 
-            init_translation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Translation(p0)
-            new_translation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Translation(p)
+            init_translation_matrix = Matrix.Translation(p0)
+            new_translation_matrix = Matrix.Translation(p)
 
-            initial_rotation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Identity(4)
-            new_rotation_matrix = to_bvh_coordinate_system_matrix @ Matrix.Identity(4)
+            initial_rotation_matrix = Matrix.Identity(4)
+            new_rotation_matrix = Matrix.Identity(4)
             if i == 0:
                 f0 = init_curve[i + 1].co.xyz - init_curve[i].co.xyz
                 f = new_curve[i + 1].co.xyz - new_curve[i].co.xyz
@@ -239,9 +276,9 @@ class MotionPathAnimation:
                 f = new_curve[i].co.xyz - new_curve[i - 1].co.xyz
 
             if f0.length > 0.001:
-                initial_rotation_matrix = to_bvh_coordinate_system_matrix @ compute_line_orientation(f0)
+                initial_rotation_matrix = compute_line_orientation(f0)
             if f.length > 0.001:
-                new_rotation_matrix = to_bvh_coordinate_system_matrix @ compute_line_orientation(f)
+                new_rotation_matrix = compute_line_orientation(f)
 
             # Transform to new
             transform_matrix = new_translation_matrix @ new_rotation_matrix \
@@ -252,10 +289,13 @@ class MotionPathAnimation:
         self.new_motion_data = self.bvh_parser.motion.generate_all_node_pos_and_orientation(
             self.bvh_parser, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
         curve = []
-        for i in range(len(self.new_motion_data.frame_list)):
-            curve.append(self.new_motion_data.frame_list[i].motion_parameter_list[
-                         self.bvh_parser.node_list[0].in_motion_start_idx:self.bvh_parser.node_list[
-                                                                              0].in_motion_start_idx + 3])
+        aggregate_frame = bvh.AggregateFrame()
+        aggregate_frame.assign_node_list(self.bvh_parser.node_list)
+        root_pos = self.bvh_parser.motion.generate_root_pos_and_orientation(self.bvh_parser.node_list, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
+        for frame_i in range(len(self.new_motion_data.frame_list)):
+            aggregate_frame.assign_frame(self.new_motion_data.frame_list[frame_i])
+            curve.append(aggregate_frame.get_loc(0))
+            # curve.append(root_pos[frame_i][:3])
 
         return create_poly_curve(self.context, self.path_collection, "new_motion_curve", curve, self.global_matrix)
 

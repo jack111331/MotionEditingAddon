@@ -97,6 +97,9 @@ class BVHNode:
                     self.channel_layout_assign[j] = i
                     break
         self.in_motion_start_idx = joint_parameter_amount
+        if self.rot_order_str == "":
+            self.rot_order_str = "XYZ"
+        print(self.joint_name, self.rot_order_str)
         self.has_loc = self.channel_layout_assign[0] != -1 or self.channel_layout_assign[1] != -1 or \
                        self.channel_layout_assign[2] != -1
         self.has_rot = self.channel_layout_assign[3] != -1 or self.channel_layout_assign[4] != -1 or \
@@ -295,9 +298,9 @@ class Motion:
                 rotation_matrix = euler.to_matrix().to_4x4()
 
                 if top.in_list_index == 0:
-                    top.model_matrix = offset_matrix @ translation_matrix @ rotation_matrix @ root_transform_matrix
+                    top.model_matrix = root_transform_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
                 else:
-                    top.model_matrix = offset_matrix @ translation_matrix @ rotation_matrix @ top.parent.model_matrix
+                    top.model_matrix = top.parent.model_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
 
                 top.rest_head_world = top.model_matrix @ Vector((0.0, 0.0, 0.0))
                 top.rest_tail_world = top.model_matrix @ Vector(top.rest_tail_local - top.rest_head_local)
@@ -547,8 +550,6 @@ class Motion:
             new_rot = aggregate_frame.get_rot(i, ret_redians=False)
             offset_loc = [(new_loc[i] - previous_loc[i]) for i in range(len(new_loc))]
             offset_rot = [(new_rot[i] - previous_rot[i]) for i in range(len(new_rot))]
-            if i == 2:
-                print("original discontinuity in joint 2", offset_rot)
             offset_loc_list.append(offset_loc)
             offset_rot_list.append(offset_rot)
 
@@ -561,17 +562,11 @@ class Motion:
                     aggregate_frame.assign_frame(self.frame_list[frame_i])
                     if i == 2:
                         original_rot = aggregate_frame.get_rot(i, ret_redians=False)
-                        print(frame_i, [original_rot[j] for j in range(len(original_rot))])
-                        print(frame_i, [smooth_factor * offset_rot_list[i][j] + original_rot[j] for j in
-                                        range(len(offset_rot_list[i]))])
                     in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
                     channels = bvh_parser.node_list[i].channels
                     self.frame_list[frame_i].motion_parameter_list[
                     in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
                         i, offset_loc, offset_rot)
-                    if i == 2:
-                        print(self.frame_list[frame_i].motion_parameter_list[
-                              in_motion_start_idx:in_motion_start_idx + channels])
 
     def smooth_function(self, current_frame, concatenate_frame, window):
         # reference from maochinn and https://www.cs.toronto.edu/~jacobson/seminar/arikan-and-forsyth-2002.pdf
@@ -751,10 +746,15 @@ def bvh_node_dict2armature(
     for obj in scene.objects:
         obj.select_set(False)
 
-    arm_data = bpy.data.armatures.new(bvh_name)
-    arm_ob = bpy.data.objects.new(bvh_name, arm_data)
+    if bpy.data.objects.get(bvh_name+"_arm") != None:
+        arm_ob = bpy.data.objects.get(bvh_name+"_arm")
+        arm_data = bpy.data.armatures.get(bvh_name)
+        bvh_parser.name = bvh_name+"_arm"
+    else:
+        arm_data = bpy.data.armatures.new(bvh_name)
+        arm_ob = bpy.data.objects.new(bvh_name, arm_data)
 
-    context.collection.objects.link(arm_ob)
+        context.collection.objects.link(arm_ob)
 
     arm_ob.select_set(True)
     context.view_layer.objects.active = arm_ob
@@ -782,12 +782,15 @@ def bvh_node_dict2armature(
 
     # XXX, annoying, remove bone.
     while arm_data.edit_bones:
-        arm_ob.edit_bones.remove(arm_data.edit_bones[-1])
+        arm_data.edit_bones.remove(arm_data.edit_bones[-1])
 
     ZERO_AREA_BONES = []
     for bvh_node in bvh_nodes_list:
         # New editbone
-        bone = bvh_node.edit_bone = arm_data.edit_bones.new(bvh_node.joint_name)
+        if arm_data.edit_bones.get(bvh_node.joint_name) != None:
+            bone = bvh_node.edit_bone = arm_data.edit_bones.get(bvh_node.joint_name)
+        else:
+            bone = bvh_node.edit_bone = arm_data.edit_bones.new(bvh_node.joint_name)
 
         bone.head = bvh_node.rest_head_world
         bone.tail = bvh_node.rest_tail_world
