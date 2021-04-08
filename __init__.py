@@ -74,7 +74,7 @@ class BVHImport(bpy.types.Operator, ImportHelper):
         return motion_path_animation.create_path()
 
 
-class ApplyAnimation(bpy.types.Operator):
+class ApplyAnimationOperator(bpy.types.Operator):
     bl_idname = "generated_animation.keyframe"
     bl_label = "apply generated keyframe animation"
     bl_description = "select animation collection and apply motion on it"
@@ -102,6 +102,21 @@ class ApplyAnimation(bpy.types.Operator):
                 motion_path_animation.new_motion_data.apply_motion_on_armature(context,
                                                                                motion_path_animation.bvh_parser.node_list,
                                                                                arm_ob, 1)
+
+        return {'FINISHED'}
+
+class UpdateGeneratedMotionOperator(bpy.types.Operator):
+    bl_idname = "update_generated_motion.keyframe"
+    bl_label = "Update generated motion"
+    bl_description = "Update generated motion by control point"
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        for motion_path_animation in motion_editing.MotionPathAnimation.path_animations:
+            motion_path_animation.update_new_path_and_motion_curve()
 
         return {'FINISHED'}
 
@@ -133,6 +148,9 @@ class PathAnimationGeneratePanel(bpy.types.Panel):
         row = layout.row()
         row.operator('generated_animation.keyframe', text="apply animation")
 
+        row = layout.row()
+        row.operator("update_generated_motion.keyframe", text="Update generated motion")
+
         # draw concatenate motion panel
         concatenate_motion.draw(context, layout)
         footskate_clean.draw(context, layout)
@@ -145,7 +163,8 @@ def menu_func_import(self, context):
 
 def register():
     bpy.utils.register_class(BVHImport)
-    bpy.utils.register_class(ApplyAnimation)
+    bpy.utils.register_class(ApplyAnimationOperator)
+    bpy.utils.register_class(UpdateGeneratedMotionOperator)
     bpy.utils.register_class(PathAnimationGeneratePanel)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
 
@@ -159,7 +178,8 @@ def register():
 
 def unregister():
     bpy.utils.unregister_class(BVHImport)
-    bpy.utils.unregister_class(ApplyAnimation)
+    bpy.utils.unregister_class(ApplyAnimationOperator)
+    bpy.utils.unregister_class(UpdateGeneratedMotionOperator)
     bpy.utils.unregister_class(PathAnimationGeneratePanel)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
 

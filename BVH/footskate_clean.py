@@ -33,7 +33,7 @@ def solve_inverse_kinematics(joint_pos, joint_rot, target, use_constraint, const
 
             for i in range(len(joint_pos) - 2, -1, -1):
                 direction = (joint_pos[i] - joint_pos[i + 1]).normalized()
-                joint_pos[i] = joint_pos[i + 1] + direction * bone_length[i - 1]
+                joint_pos[i] = joint_pos[i + 1] + direction * bone_length[i]
 
             if (joint_pos[0] - last_pos).magnitude < epsilon:
                 break
@@ -60,11 +60,11 @@ def solve_inverse_kinematics(joint_pos, joint_rot, target, use_constraint, const
             if normal.dot(cross) < 0:
                 angle = -angle
 
-            joint_rot[i] = Quaternion(normal, angle) @ (joint_pos[i] - joint_pos[i - 1]) + joint_pos[i - 1]
+            joint_pos[i] = Quaternion(normal, angle) @ (joint_pos[i] - joint_pos[i - 1]) + joint_pos[i - 1]
 
     for i in range(1, len(joint_pos)):
         bone_direction = (joint_pos[i - 1] - joint_pos[i]).normalized()
-        joint_rot[i] = Vector((0, 0, -1)).rotation_difference(bone_direction).to_euler()
+        joint_rot[i] = Vector((0, 0, -1)).rotation_difference(bone_direction)
 
     return joint_pos, joint_rot
 
@@ -159,18 +159,15 @@ class FootSkateCleanOperator(bpy.types.Operator):
         world_loc_and_rot_list = animation.new_motion_data.generate_all_node_pos_and_orientation(
             animation.bvh_parser, target_node_dict)
 
-        aggregate_frame = bvh.AggregateFrame()
-        aggregate_frame.assign_node_list(animation.bvh_parser.node_list)
         for frame_i in range(len(animation.new_motion_data.frame_list)):
-            aggregate_frame.assign_frame(animation.new_motion_data.frame_list[frame_i])
             # Setup constraint ankle position on ground
             world_loc_and_rot = world_loc_and_rot_list[frame_i]
             joint_poses = [Vector(loc_and_rot[:3]) for loc_and_rot in world_loc_and_rot]
-            joint_rots = [Euler(loc_and_rot[3:], "XYZ") for loc_and_rot in world_loc_and_rot]
+            joint_rots = [Euler(loc_and_rot[3:], nodes[i].rot_order_str[::-1]) for i, loc_and_rot in enumerate(world_loc_and_rot)]
 
-            intersection = geometry.intersect_line_plane(joint_poses[0], joint_poses[0] + Vector((0, 1, 0)),
-                                                         Vector((0, self.ground_height, 0)), Vector((0, 1, 0)))
-            if intersection[1] > joint_poses[0][1]:
+            intersection = geometry.intersect_line_plane(joint_poses[0], joint_poses[0] + Vector((0, 0, 1)),
+                                                         Vector((0, self.ground_height, 0)), Vector((0, 0, 1)))
+            if intersection[2] > joint_poses[0][2]:
                 print("Before pos:", joint_poses)
                 print("Before rot:", joint_rots)
                 new_joint_poses, new_joint_rots = solve_inverse_kinematics(joint_poses, joint_rots, intersection, True,
@@ -185,41 +182,13 @@ class FootSkateCleanOperator(bpy.types.Operator):
                     transform_matrix = translation_matrix @ rotation_matrix
                     nodes[i].model_matrix = transform_matrix
 
-                    in_motion_start_idx = animation.bvh_parser.node_list[nodes[i].in_list_index].in_motion_start_idx
-                    channels = animation.bvh_parser.node_list[nodes[i].in_list_index].channels
-                    animation.new_motion_data.frame_list[frame_i].motion_parameter_list[
-                    in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.to_channel(
-                        nodes[i].in_list_index, new_joint_poses[i], new_joint_rots[i])
+                    head_world_pos = nodes[i].model_matrix.to_translation()
+                    # get bvh local euler angle
+                    head_world_rot = nodes[i].model_matrix.to_euler(nodes[i].rot_order_str[::-1])
+                    head_world_rot = [angle for angle in head_world_rot]
 
-                # Update foot node's children
-                generate_queue = [children for children in foot_node.children]
-                while len(generate_queue) != 0:
-                    # transform_matrix_list
-                    top = generate_queue[0]
-                    generate_queue.pop(0)
-                    for children in top.children:
-                        generate_queue.append(children)
-
-                    offset_matrix = Matrix.Translation(top.rest_head_local)
-                    translation_matrix = Matrix.Translation(aggregate_frame.get_loc(top.in_list_index))
-                    rot = aggregate_frame.get_rot(top.in_list_index)
-                    euler = Euler(rot, top.rot_order_str[::-1])
-                    rotation_matrix = euler.to_matrix().to_4x4()
-                    top.model_matrix = top.parent.model_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
-                    top.rest_head_world = top.model_matrix @ Vector((0.0, 0.0, 0.0))
-                    top.rest_tail_world = top.model_matrix @ Vector(top.rest_tail_local - top.rest_head_local)
-                    orientation_euler_angle = rotation_matrix.to_euler(
-                        top.rot_order_str[::-1])
-
-                    in_motion_start_idx = animation.bvh_parser.node_list[top.in_list_index].in_motion_start_idx
-                    channels = animation.bvh_parser.node_list[top.in_list_index].channels
-                    animation.new_motion_data.frame_list[frame_i].motion_parameter_list[
-                    in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.to_channel(top.in_list_index,
-                                                                                                     list(
-                                                                                                         top.rest_head_world[
-                                                                                                         :]),
-                                                                                                     orientation_euler_angle)
-
+                    animation.new_motion_data.frame_list[frame_i].set_loc(animation.bvh_parser.node_list, nodes[i].in_list_index, head_world_pos)
+                    animation.new_motion_data.frame_list[frame_i].set_rot(animation.bvh_parser.node_list, nodes[i].in_list_index, head_world_rot)
 
 def draw(context, layout):
     row = layout.row()

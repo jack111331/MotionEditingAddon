@@ -59,11 +59,13 @@ def create_poly_curve(context, collection, name, points):
         polyline.points[i].co = (x, y, z, 1)
 
     # create Object
-    curve_ob = bpy.data.objects.new(name, curve_data)
+    curve_ob = bpy.data.objects.get(name)
+    if curve_ob == None:
+        curve_ob = bpy.data.objects.new(name, curve_data)
+        collection.objects.link(curve_ob)
     curve_data.bevel_depth = 0.01
 
     # attach to scene and validate context
-    collection.objects.link(curve_ob)
     context.view_layer.objects.active = curve_ob
 
     return curve_ob
@@ -82,7 +84,7 @@ def solve_cubic_bspline(point_list):
         coordinate_list.append([point.co.xyz[0], point.co.xyz[1], point.co.xyz[2]])
         w.append([1.0, 1.0, 1.0])
     if len(coordinate_list) > 100:
-        control_point_amount = 10
+        control_point_amount = 5
     else:
         control_point_amount = len(coordinate_list) // 8
     if control_point_amount < 5:
@@ -134,7 +136,8 @@ def create_cubic_bspline_curve(context, collection, control_points, name, u):
     return create_poly_curve(context, collection, name, cubic_bspline_curve)
 
 
-def compute_line_orientation(front, world_up=Vector((0, 1, 0))):
+def compute_line_orientation(front, world_up=Vector((0, 0, 1))):
+    # in blender, z is the upward
     z = front
     x = world_up.cross(z)
     y = z.cross(x)
@@ -199,18 +202,19 @@ class MotionPathAnimation:
 
         @persistent
         def change_cotrol_point_handler(scene):
-            for ob in self.context.selected_objects:
-                # is control point
-                # if ob.name in {point.name for point in self.path_c_points_ob}:
-                if ob.users_collection[0] is self.control_point_collection:
-                    # update bspline
-                    self.update_new_path_and_motion_curve()
-                    break
+            pass
+            # for ob in self.context.selected_objects:
+            #     # is control point
+            #     # if ob.name in {point.name for point in self.path_c_points_ob}:
+            #     if ob.users_collection[0] is self.control_point_collection:
+            #         # update bspline
+            #         self.update_new_path_and_motion_curve()
+            #         break
 
         # clear handler, if only one animation you can enable this!
         # bpy.app.handlers.depsgraph_update_pre.clear()
 
-        bpy.app.handlers.depsgraph_update_pre.append(change_cotrol_point_handler)
+        # bpy.app.handlers.depsgraph_update_pre.append(change_cotrol_point_handler)
 
         return {'FINISHED'}
 
@@ -287,9 +291,6 @@ class MotionPathAnimation:
     def update_new_path_and_motion_curve(self):
         if self.is_updating_curve == False:
             self.is_updating_curve = True
-            bpy.data.objects.remove(self.new_path)
-            bpy.data.objects.remove(self.new_motion_curve)
-
             c_points = []
             for c_point_ob in self.control_point_collection.all_objects.values():
                 c_points.append(c_point_ob.location.xyz)

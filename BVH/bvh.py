@@ -359,6 +359,8 @@ class Motion:
         return root_pos_and_orientation_list
 
     # Should ensure the root_transform_matrix_list is already in local bvh coodinate system
+    # Because all motion data are defined in local coordinate system, so we can simply modify the root coordinate system
+    # to affect its all child node
     def generate_all_transformed_frame(self, bvh_parser, root_transform_matrix_list):
         new_motion = Motion()
         new_motion.frame_time = self.frame_time
@@ -768,7 +770,9 @@ def bvh_node_dict2armature(
 
     if bpy.data.objects.get(bvh_name + "_arm") != None:
         arm_ob = bpy.data.objects.get(bvh_name + "_arm")
+        print(arm_ob)
         arm_data = bpy.data.armatures.get(bvh_name)
+        print(arm_data)
         bvh_parser.name = bvh_name + "_arm"
     else:
         arm_data = bpy.data.armatures.new(bvh_name)
@@ -806,11 +810,7 @@ def bvh_node_dict2armature(
     ZERO_AREA_BONES = []
     for bvh_node in bvh_nodes_list:
         # New editbone
-        # FIXME replace original edit_bones
-        if arm_data.edit_bones.get(bvh_node.joint_name) != None:
-            bone = bvh_node.edit_bone = arm_data.edit_bones.get(bvh_node.joint_name)
-        else:
-            bone = bvh_node.edit_bone = arm_data.edit_bones.new(bvh_node.joint_name)
+        bone = bvh_node.edit_bone = arm_data.edit_bones.new(bvh_node.joint_name)
 
         bone.head = bvh_node.rest_head_world
         bone.tail = bvh_node.rest_tail_world
