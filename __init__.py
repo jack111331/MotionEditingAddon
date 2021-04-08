@@ -3,6 +3,7 @@ from bpy_extras.io_utils import ImportHelper, orientation_helper, axis_conversio
 from bpy.props import BoolProperty
 from .BVH import concatenate_motion
 from .BVH import footskate_clean
+from .BVH import camera_follow
 import subprocess
 import os
 
@@ -154,6 +155,8 @@ class PathAnimationGeneratePanel(bpy.types.Panel):
         # draw concatenate motion panel
         concatenate_motion.draw(context, layout)
         footskate_clean.draw(context, layout)
+        camera_follow.draw(context, layout)
+
 
 
 # Only needed if you want to add into a dynamic menu
@@ -174,6 +177,7 @@ def register():
 
     concatenate_motion.register()
     footskate_clean.register()
+    camera_follow.register()
 
 
 def unregister():
@@ -185,6 +189,7 @@ def unregister():
 
     concatenate_motion.unregister()
     footskate_clean.unregister()
+    camera_follow.unregister()
 
 
 if __name__ == "__main__":
