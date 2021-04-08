@@ -278,13 +278,9 @@ class MotionPathAnimation:
         self.new_motion_data = self.bvh_parser.motion.generate_all_transformed_frame(
             self.bvh_parser, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
         curve = []
-        aggregate_frame = bvh.AggregateFrame()
-        aggregate_frame.assign_node_list(self.bvh_parser.node_list)
-        root_pos = self.bvh_parser.motion.generate_root_pos_and_orientation(self.bvh_parser.node_list, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
+        root_pos_and_orientation_list = self.bvh_parser.motion.generate_root_pos_and_orientation(self.bvh_parser.node_list, self.initial_to_new_path_transform_matrix_list)
         for frame_i in range(len(self.new_motion_data.frame_list)):
-            aggregate_frame.assign_frame(self.new_motion_data.frame_list[frame_i])
-            curve.append(aggregate_frame.get_loc(0))
-            # curve.append(root_pos[frame_i][:3])
+            curve.append(root_pos_and_orientation_list[frame_i][:3])
 
         return create_poly_curve(self.context, self.path_collection, "new_motion_curve", curve)
 

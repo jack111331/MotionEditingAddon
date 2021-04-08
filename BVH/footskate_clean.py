@@ -156,7 +156,7 @@ class FootSkateCleanOperator(bpy.types.Operator):
         nodes = (foot_node, knee_node, hip_node)
 
         target_node_dict = {node.in_list_index: i for i, node in enumerate(nodes)}
-        world_loc_and_rot_list = animation.new_motion_data.generate_all_node_pos_and_orientation_in_world(
+        world_loc_and_rot_list = animation.new_motion_data.generate_all_node_pos_and_orientation(
             animation.bvh_parser, target_node_dict)
 
         aggregate_frame = bvh.AggregateFrame()

@@ -256,9 +256,23 @@ class Frame:
     def set_rot(self, node_list, bone_index, rot):
         return self.set_content(node_list, bone_index, [3, 4, 5], rot)
 
+    def add_content(self, node_list, bone_index, channel_list, content_list):
+        if len(channel_list) != len(channel_list):
+            print("[ERROR] Fail to set content in frame")
+        in_motion_start_idx = node_list[bone_index].in_motion_start_idx
+        for i in range(len(channel_list)):
+            if node_list[bone_index].channel_layout_assign[channel_list[i]] != -1:
+                channel_pos = in_motion_start_idx + node_list[bone_index].channel_layout_assign[channel_list[i]]
+                self.motion_parameter_list[channel_pos] += content_list[i]
+
+    def add_loc(self, node_list, bone_index, loc):
+        return self.add_content(node_list, bone_index, [0, 1, 2], loc)
+
+    def add_rot(self, node_list, bone_index, rot):
+        return self.add_content(node_list, bone_index, [3, 4, 5], rot)
+
     def convert_to_blender(self, node_list, to_blender_matrix):
         for node in node_list:
-
             origin_loc = self.get_loc(node_list, node.in_list_index)
             to_blender_loc = (to_blender_matrix @ Vector(origin_loc).to_4d()).to_3d()
             self.set_loc(node_list, node.in_list_index, to_blender_loc)
@@ -319,9 +333,8 @@ class Motion:
 
             offset_matrix = Matrix.Translation(top.rest_head_local)
             translation_matrix = Matrix.Translation(self.frame_list[frame_i].get_loc(node_list, top.in_list_index))
-            euler = Euler(self.frame_list[frame_i].get_rot(node_list, top.in_list_index), "ZYX")
+            euler = Euler(self.frame_list[frame_i].get_rot(node_list, top.in_list_index), top.rot_order_str[::-1])
             rotation_matrix = euler.to_matrix().to_4x4()
-
             # First done transformation on local coordinate system, then transform it to global coordinate system
             if top.in_list_index == 0:
                 top.model_matrix = root_transform_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
@@ -352,6 +365,7 @@ class Motion:
         new_motion.frame_amount = self.frame_amount
 
         affect_node_list = BVHNode.generate_all_children_index(0, bvh_parser.node_list)
+        root_node = bvh_parser.node_list[0]
 
         for frame_i in range(len(self.frame_list)):
             new_frame = Frame()
@@ -365,61 +379,45 @@ class Motion:
                 for children in top.children:
                     generate_queue.append(children)
 
-                head_world_pos = top.model_matrix.to_translation()
+                new_frame.set_loc(bvh_parser.node_list, top.in_list_index,
+                                  self.frame_list[frame_i].get_loc(bvh_parser.node_list, top.in_list_index))
+                new_frame.set_rot(bvh_parser.node_list, top.in_list_index,
+                                  self.frame_list[frame_i].get_rot(bvh_parser.node_list, top.in_list_index))
 
-                # get bvh local euler angle
-                head_world_rot = top.model_matrix.to_euler("ZYX")
-                head_world_rot = [angle for angle in head_world_rot]
+            head_world_pos = root_node.model_matrix.to_translation()
+            # get bvh local euler angle
+            head_world_rot = root_node.model_matrix.to_euler(root_node.rot_order_str[::-1])
+            head_world_rot = [angle for angle in head_world_rot]
 
-                new_frame.set_loc(bvh_parser.node_list, top.in_list_index, head_world_pos)
-                new_frame.set_rot(bvh_parser.node_list, top.in_list_index, head_world_rot)
+            new_frame.set_loc(bvh_parser.node_list, root_node.in_list_index, head_world_pos)
+            new_frame.set_rot(bvh_parser.node_list, root_node.in_list_index, head_world_rot)
 
             new_motion.frame_list.append(new_frame)
         return new_motion
 
-    def generate_all_node_pos_and_orientation_in_world(self, bvh_parser, target_node_dict,
-                                                       root_transform_matrix_list=None):
+    def generate_all_node_pos_and_orientation(self, bvh_parser, target_node_dict,
+                                              root_transform_matrix_list=None):
         world_loc_and_rot_list = []
-        new_node_list = BVHNode.clone_list(bvh_parser.node_list)
-        num_frame = len(self.frame_list)
-
-        aggregate_frame = AggregateFrame()
-        aggregate_frame.assign_node_list(new_node_list)
-
-        for frame_i in range(num_frame):
+        affect_node_list = BVHNode.generate_all_children_index(0, bvh_parser.node_list)
+        for frame_i in range(len(self.frame_list)):
             world_loc_and_rot = [[]] * 3
             root_transform_matrix = Matrix.Identity(4)
             if root_transform_matrix_list != None:
                 root_transform_matrix = root_transform_matrix_list[frame_i]
-            aggregate_frame.assign_frame(self.frame_list[frame_i])
-            generate_queue = [new_node_list[0]]
+            self.generate_frame_model_matrix(bvh_parser.node_list, frame_i, 0, affect_node_list, root_transform_matrix)
+            generate_queue = [bvh_parser.node_list[0]]
             while len(generate_queue) != 0:
                 top = generate_queue[0]
                 generate_queue.pop(0)
                 for children in top.children:
                     generate_queue.append(children)
 
-                offset_matrix = Matrix.Translation(top.rest_head_local)
-                translation_matrix = Matrix.Translation(aggregate_frame.get_loc(top.in_list_index))
-                rot = aggregate_frame.get_rot(top.in_list_index)
-                euler = Euler(rot, top.rot_order_str[::-1])
-                rotation_matrix = euler.to_matrix().to_4x4()
-
-                if top.in_list_index == 0:
-                    top.model_matrix = root_transform_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
-                else:
-                    top.model_matrix = top.parent.model_matrix @ offset_matrix @ translation_matrix @ rotation_matrix
-
-                top.rest_head_world = top.model_matrix @ Vector((0.0, 0.0, 0.0))
-                top.rest_tail_world = top.model_matrix @ Vector(top.rest_tail_local - top.rest_head_local)
-
-                #  get bvh world euler angle
-                orientation_euler_angle = top.model_matrix.to_euler(top.rot_order_str[::-1])
-                orientation_euler_angle = [angle for angle in orientation_euler_angle]
-
                 if top.in_list_index in target_node_dict:
-                    world_loc_and_rot[target_node_dict[top.in_list_index]] = list(
-                        top.rest_head_world[:]) + orientation_euler_angle
+                    head_world_pos = top.model_matrix.to_translation()
+
+                    head_world_rot = top.model_matrix.to_euler(top.rot_order_str[::-1])
+                    head_world_rot = [angle for angle in head_world_rot]
+                    world_loc_and_rot[target_node_dict[top.in_list_index]] = list(head_world_pos[:]) + head_world_rot
 
             world_loc_and_rot_list.append(world_loc_and_rot)
         return world_loc_and_rot_list
@@ -516,9 +514,9 @@ class Motion:
 
                     bone_rotation_matrix = euler.to_matrix().to_4x4()
                     bone_rotation_matrix = (
-                        bone_rest_matrix_inv @
-                        bone_rotation_matrix @
-                        bone_rest_matrix
+                            bone_rest_matrix_inv @
+                            bone_rotation_matrix @
+                            bone_rest_matrix
                     )
 
                     rotate[frame_i] = bone_rotation_matrix.to_euler(
@@ -554,14 +552,10 @@ class Motion:
 
     def concatenate(self, bvh_parser, concatenate_motion):
         concatenate_start_frame_idx = len(self.frame_list)
-        aggregate_frame = AggregateFrame()
-        aggregate_frame.assign_node_list(bvh_parser.node_list)
-        aggregate_frame.assign_frame(self.frame_list[-1])
-        last_loc = aggregate_frame.get_loc(0)
-        last_rot = aggregate_frame.get_rot(0)
-        aggregate_frame.assign_frame(concatenate_motion.frame_list[0])
-        new_loc = aggregate_frame.get_loc(0)
-        new_rot = aggregate_frame.get_rot(0)
+        last_loc = self.frame_list[-1].get_loc(bvh_parser.node_list, 0)
+        last_rot = self.frame_list[-1].get_rot(bvh_parser.node_list, 0)
+        new_loc = concatenate_motion.frame_list[0].get_loc(bvh_parser.node_list, 0)
+        new_rot = concatenate_motion.frame_list[0].get_rot(bvh_parser.node_list, 0)
 
         # drag concatenate motion to current motion
         offset_loc = [last_loc[i] - new_loc[i] for i in range(len(new_loc))]
@@ -569,13 +563,17 @@ class Motion:
 
         for frame_i in range(len(concatenate_motion.frame_list)):
             new_frame = concatenate_motion.frame_list[frame_i].clone()
-            aggregate_frame.assign_frame(concatenate_motion.frame_list[frame_i])
-            for i in range(len(bvh_parser.node_list)):
-                in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
-                channels = bvh_parser.node_list[i].channels
-                new_frame.motion_parameter_list[
-                in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
-                    i, offset_loc, offset_rot)
+            new_frame.set_loc(bvh_parser.node_list, 0,
+                              concatenate_motion.frame_list[frame_i].get_loc(bvh_parser.node_list, 0))
+            new_frame.add_loc(bvh_parser.node_list, 0, offset_loc)
+            new_frame.set_rot(bvh_parser.node_list, 0,
+                              concatenate_motion.frame_list[frame_i].get_rot(bvh_parser.node_list, 0))
+            new_frame.add_rot(bvh_parser.node_list, 0, offset_rot)
+            for i in range(1, len(bvh_parser.node_list)):
+                new_frame.set_loc(bvh_parser.node_list, i,
+                                  concatenate_motion.frame_list[frame_i].get_loc(bvh_parser.node_list, i))
+                new_frame.set_rot(bvh_parser.node_list, i,
+                                  concatenate_motion.frame_list[frame_i].get_rot(bvh_parser.node_list, i))
             self.frame_list.append(new_frame)
 
         self.frame_amount = len(self.frame_list)
@@ -585,35 +583,27 @@ class Motion:
         smooth_frame_start = concatenate_frame - smooth_window
         smooth_frame_end = concatenate_frame + smooth_window
 
-        aggregate_frame = AggregateFrame()
-        aggregate_frame.assign_node_list(bvh_parser.node_list)
         offset_loc_list = []
         offset_rot_list = []
-        for i in range(len(bvh_parser.node_list)):
-            # calculate each node's offset inbetween concatenate frame
-            aggregate_frame.assign_frame(self.frame_list[concatenate_frame])
-            previous_loc = aggregate_frame.get_loc(i)
-            previous_rot = aggregate_frame.get_rot(i)
-            aggregate_frame.assign_frame(self.frame_list[concatenate_frame + 1])
-            new_loc = aggregate_frame.get_loc(i)
-            new_rot = aggregate_frame.get_rot(i)
-            offset_loc = [(new_loc[i] - previous_loc[i]) for i in range(len(new_loc))]
-            offset_rot = [(new_rot[i] - previous_rot[i]) for i in range(len(new_rot))]
-            offset_loc_list.append(offset_loc)
-            offset_rot_list.append(offset_rot)
 
         for frame_i in range(smooth_frame_start, smooth_frame_end + 1):
+            for i in range(len(bvh_parser.node_list)):
+                # calculate each node's offset inbetween concatenate frame
+                previous_loc = self.frame_list[concatenate_frame].get_loc(bvh_parser.node_list, i)
+                previous_rot = self.frame_list[concatenate_frame].get_rot(bvh_parser.node_list, i)
+                new_loc = self.frame_list[concatenate_frame + 1].get_loc(bvh_parser.node_list, i)
+                new_rot = self.frame_list[concatenate_frame + 1].get_rot(bvh_parser.node_list, i)
+                offset_loc = [(new_loc[i] - previous_loc[i]) for i in range(len(new_loc))]
+                offset_rot = [(new_rot[i] - previous_rot[i]) for i in range(len(new_rot))]
+                offset_loc_list.append(offset_loc)
+                offset_rot_list.append(offset_rot)
             if 0 < frame_i < self.frame_amount:
                 smooth_factor = self.smooth_function(frame_i, concatenate_frame, smooth_window)
                 for i in range(len(bvh_parser.node_list)):
                     offset_loc = [smooth_factor * offset_loc_list[i][j] for j in range(len(offset_loc_list[i]))]
                     offset_rot = [smooth_factor * offset_rot_list[i][j] for j in range(len(offset_rot_list[i]))]
-                    aggregate_frame.assign_frame(self.frame_list[frame_i])
-                    in_motion_start_idx = bvh_parser.node_list[i].in_motion_start_idx
-                    channels = bvh_parser.node_list[i].channels
-                    self.frame_list[frame_i].motion_parameter_list[
-                    in_motion_start_idx:in_motion_start_idx + channels] = aggregate_frame.added_offset_to_channel(
-                        i, offset_loc, offset_rot)
+                    self.frame_list[frame_i].add_loc(bvh_parser.node_list, i, offset_loc)
+                    self.frame_list[frame_i].add_rot(bvh_parser.node_list, i, offset_rot)
 
     def smooth_function(self, current_frame, concatenate_frame, window):
         # reference from maochinn and https://www.cs.toronto.edu/~jacobson/seminar/arikan-and-forsyth-2002.pdf
