@@ -286,7 +286,7 @@ class MotionPathAnimation:
 
             self.initial_to_new_path_transform_matrix_list.append(transform_matrix)
 
-        self.new_motion_data = self.bvh_parser.motion.generate_all_node_pos_and_orientation(
+        self.new_motion_data = self.bvh_parser.motion.generate_all_transformed_frame(
             self.bvh_parser, root_transform_matrix_list=self.initial_to_new_path_transform_matrix_list)
         curve = []
         aggregate_frame = bvh.AggregateFrame()
