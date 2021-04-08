@@ -70,8 +70,7 @@ class BVHImport(bpy.types.Operator, ImportHelper):
 
         keywords["global_matrix"] = global_matrix
         parser = bvh.load(context, **keywords)
-        motion_path_animation = motion_editing.MotionPathAnimation.add_path_animation_from_parser(context, parser,
-                                                                                                  global_matrix)
+        motion_path_animation = motion_editing.MotionPathAnimation.add_path_animation_from_parser(context, parser)
         return motion_path_animation.create_path()
 
 

@@ -40,7 +40,7 @@ def convert_to_arc_length(cubic_bspline_curve, u):
     return new_u
 
 
-def create_poly_curve(context, collection, name, points, global_matrix):
+def create_poly_curve(context, collection, name, points):
     # create the Curve Datablock
     if name in bpy.data.curves.keys():
         curve_data = bpy.data.curves[name]
@@ -61,9 +61,6 @@ def create_poly_curve(context, collection, name, points, global_matrix):
     # create Object
     curve_ob = bpy.data.objects.new(name, curve_data)
     curve_data.bevel_depth = 0.01
-
-    curve_ob.matrix_world = global_matrix
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
     # attach to scene and validate context
     collection.objects.link(curve_ob)
@@ -101,7 +98,7 @@ def solve_cubic_bspline(point_list):
     return X1, u1
 
 
-def create_cube(collection, name, position, global_matrix, scale=1.0):
+def create_cube(collection, name, position, scale=1.0):
     me = bpy.data.meshes.new(name)
     verts = [
         (-0.5, -0.5, -0.5), (-0.5, 0.5, -0.5), (0.5, 0.5, -0.5), (0.5, -0.5, -0.5),
@@ -118,8 +115,7 @@ def create_cube(collection, name, position, global_matrix, scale=1.0):
     me.update(calc_edges=True)
 
     ob = bpy.data.objects.new(name, me)
-    ob.matrix_world = global_matrix @ Matrix.Translation(position)
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+    ob.location = position
     collection.objects.link(ob)
 
     return ob
@@ -130,12 +126,12 @@ def interpolate_cubic_bspline_curve(control_points, u):
     return c.M(u, control_points)
 
 
-def create_cubic_bspline_curve(context, collection, control_points, name, u, global_matrix):
+def create_cubic_bspline_curve(context, collection, control_points, name, u):
     cubic_bspline_curve = interpolate_cubic_bspline_curve(control_points, u)
     # arc-length the curve and regenerate it
     new_u = convert_to_arc_length(cubic_bspline_curve, u)
     cubic_bspline_curve = interpolate_cubic_bspline_curve(control_points, new_u)
-    return create_poly_curve(context, collection, name, cubic_bspline_curve, global_matrix)
+    return create_poly_curve(context, collection, name, cubic_bspline_curve)
 
 
 def compute_line_orientation(front, world_up=Vector((0, 1, 0))):
@@ -154,7 +150,7 @@ def compute_line_orientation(front, world_up=Vector((0, 1, 0))):
 class MotionPathAnimation:
     path_animations = []
 
-    def __init__(self, bvh_parser, context, global_matrix=None):
+    def __init__(self, bvh_parser, context):
         self.bvh_parser = bvh_parser
         self.context = context
         self.collection = create_collection(context.scene.collection, bvh_parser.name)
@@ -168,18 +164,13 @@ class MotionPathAnimation:
         self.initial_to_new_path_transform_matrix_list = None
         self.is_updating_curve = False
         self.u = None
-        if global_matrix == None:
-            self.global_matrix = Matrix.Identity(4)
-        else:
-            self.global_matrix = global_matrix
 
     def clone(self):
         new_bvh_parser = self.bvh_parser.clone()
         new_bvh_parser.name = new_bvh_parser.name + "$copy"
         motion_path_animation = MotionPathAnimation(new_bvh_parser, self.context)
-        bvh.bvh_node_dict2armature(self.context, new_bvh_parser.name, new_bvh_parser, global_matrix=self.global_matrix)
+        bvh.bvh_node_dict2armature(self.context, new_bvh_parser.name, new_bvh_parser)
         motion_path_animation.u = self.u[:]
-        motion_path_animation.global_matrix = self.global_matrix
         MotionPathAnimation.path_animations.append(motion_path_animation)
         return motion_path_animation
 
@@ -191,8 +182,8 @@ class MotionPathAnimation:
         return None
 
     @classmethod
-    def add_path_animation_from_parser(cls, context, parser, global_matrix):
-        motion_path_animation = MotionPathAnimation(parser, context, global_matrix)
+    def add_path_animation_from_parser(cls, context, parser):
+        motion_path_animation = MotionPathAnimation(parser, context)
         MotionPathAnimation.path_animations.append(motion_path_animation)
         return motion_path_animation
 
@@ -234,7 +225,7 @@ class MotionPathAnimation:
         for i in range(len(root_pos_and_orientation_list)):
             curve.append(root_pos_and_orientation_list[i][:3])
 
-        return create_poly_curve(self.context, self.path_collection, "initial_motion_curve", curve, self.global_matrix)
+        return create_poly_curve(self.context, self.path_collection, "initial_motion_curve", curve)
 
     def create_path_curve(self):
 
@@ -243,13 +234,11 @@ class MotionPathAnimation:
 
         c_points, self.u = solve_cubic_bspline(self.initial_motion_curve.data.splines[0].points.values())
         for i in range(len(c_points)):
-            create_cube(self.control_point_collection, "c_" + str(i), c_points[i], self.global_matrix, 10.0)
+            create_cube(self.control_point_collection, "c_" + str(i), c_points[i], 10.0)
 
         return (
-            create_cubic_bspline_curve(self.context, self.path_collection, c_points, "init_path", self.u,
-                                       self.global_matrix),
-            create_cubic_bspline_curve(self.context, self.path_collection, c_points, "new_path", self.u,
-                                       self.global_matrix))
+            create_cubic_bspline_curve(self.context, self.path_collection, c_points, "init_path", self.u),
+            create_cubic_bspline_curve(self.context, self.path_collection, c_points, "new_path", self.u))
 
     #
     def create_new_motion_curve(self):
@@ -297,7 +286,7 @@ class MotionPathAnimation:
             curve.append(aggregate_frame.get_loc(0))
             # curve.append(root_pos[frame_i][:3])
 
-        return create_poly_curve(self.context, self.path_collection, "new_motion_curve", curve, self.global_matrix)
+        return create_poly_curve(self.context, self.path_collection, "new_motion_curve", curve)
 
     def update_new_path_and_motion_curve(self):
         if self.is_updating_curve == False:
@@ -307,9 +296,9 @@ class MotionPathAnimation:
 
             c_points = []
             for c_point_ob in self.control_point_collection.all_objects.values():
-                c_points.append(self.global_matrix.inverted() @ c_point_ob.location.xyz)
+                c_points.append(c_point_ob.location.xyz)
 
             self.new_path = create_cubic_bspline_curve(self.context, self.path_collection
-                                                       , c_points, "new_path", self.u, self.global_matrix)
+                                                       , c_points, "new_path", self.u)
             self.new_motion_curve = self.create_new_motion_curve()
             self.is_updating_curve = False

@@ -227,16 +227,12 @@ class Frame:
         in_motion_start_idx = node_list[bone_index].in_motion_start_idx
         channels = node_list[bone_index].channels
         channel_content = self.motion_parameter_list[in_motion_start_idx:in_motion_start_idx + channels]
-        if bone_index == 0:
-            print(channel_content)
         extract_channel_content = []
         for channel in channel_list:
             if node_list[bone_index].channel_layout_assign[channel] != -1:
                 extract_channel_content.append(channel_content[node_list[bone_index].channel_layout_assign[channel]])
             else:
                 extract_channel_content.append(0.0)
-        if bone_index == 0:
-            print(extract_channel_content)
         return extract_channel_content
 
     def get_loc(self, node_list, bone_index):
@@ -517,8 +513,6 @@ class Motion:
                     # apply rotation order and convert to XYZ
                     # note that the rot_order_str is reversed.
                     euler = Euler(bvh_rot, bvh_node.rot_order_str[::-1])
-                    if i == 0:
-                        print("Bone 0, rotate quantity", bvh_rot, euler)
 
                     bone_rotation_matrix = euler.to_matrix().to_4x4()
                     bone_rotation_matrix = (
@@ -529,8 +523,7 @@ class Motion:
 
                     rotate[frame_i] = bone_rotation_matrix.to_euler(
                         pose_bone.rotation_mode, prev_euler)
-                    if i == 0:
-                        print("Bone 0, rotated", rotate[frame_i])
+
                     prev_euler = rotate[frame_i]
 
                 # For each euler angle x, y, z (or quaternion w, x, y, z).
