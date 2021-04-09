@@ -146,72 +146,6 @@ class BVHNode:
         return True
 
 
-class AggregateFrame:
-    def __init__(self):
-        self.node_list = None
-        self.frame = None
-
-    def assign_node_list(self, node_list):
-        self.node_list = node_list
-
-    def assign_frame(self, frame):
-        self.frame = frame
-
-    def get_loc(self, bone_index):
-        channel = self.frame.motion_parameter_list[
-                  self.node_list[bone_index].in_motion_start_idx:self.node_list[bone_index].in_motion_start_idx +
-                                                                 self.node_list[bone_index].channels]
-        x, y, z = 0.0, 0.0, 0.0
-        if self.node_list[bone_index].channel_layout_assign[0] != -1:
-            x = channel[self.node_list[bone_index].channel_layout_assign[0]]
-        if self.node_list[bone_index].channel_layout_assign[1] != -1:
-            y = channel[self.node_list[bone_index].channel_layout_assign[1]]
-        if self.node_list[bone_index].channel_layout_assign[2] != -1:
-            z = channel[self.node_list[bone_index].channel_layout_assign[2]]
-
-        return [x, y, z]
-
-    def get_rot(self, bone_index):
-        channel = self.frame.motion_parameter_list[
-                  self.node_list[bone_index].in_motion_start_idx:self.node_list[bone_index].in_motion_start_idx +
-                                                                 self.node_list[bone_index].channels]
-        x, y, z = 0.0, 0.0, 0.0
-        if self.node_list[bone_index].channel_layout_assign[3] != -1:
-            x = channel[self.node_list[bone_index].channel_layout_assign[3]]
-        if self.node_list[bone_index].channel_layout_assign[4] != -1:
-            y = channel[self.node_list[bone_index].channel_layout_assign[4]]
-        if self.node_list[bone_index].channel_layout_assign[5] != -1:
-            z = channel[self.node_list[bone_index].channel_layout_assign[5]]
-
-        return [x, y, z]
-
-    def to_channel(self, bone_index, loc, rot):
-        channel = [0] * self.node_list[bone_index].channels
-        for i in range(3):
-            if self.node_list[bone_index].channel_layout_assign[i] != -1:
-                channel[self.node_list[bone_index].channel_layout_assign[i]] = loc[i]
-            if self.node_list[bone_index].channel_layout_assign[i + 3] != -1:
-                channel[self.node_list[bone_index].channel_layout_assign[i + 3]] = rot[i]
-        return channel
-
-    def added_offset_to_channel(self, bone_index, loc, rot):
-        channel = [0] * self.node_list[bone_index].channels
-        in_motion_start_idx = self.node_list[bone_index].in_motion_start_idx
-        for i in range(3):
-            if self.node_list[bone_index].channel_layout_assign[i] != -1:
-                channel[self.node_list[bone_index].channel_layout_assign[i]] = self.frame.motion_parameter_list[
-                                                                                   in_motion_start_idx + self.node_list[
-                                                                                       bone_index].channel_layout_assign[
-                                                                                       i]] + loc[i]
-            if self.node_list[bone_index].channel_layout_assign[i + 3] != -1:
-                channel[self.node_list[bone_index].channel_layout_assign[i + 3]] = self.frame.motion_parameter_list[
-                                                                                       in_motion_start_idx +
-                                                                                       self.node_list[
-                                                                                           bone_index].channel_layout_assign[
-                                                                                           i + 3]] + rot[i]
-        return channel
-
-
 class Frame:
     def __init__(self):
         self.motion_parameter_list = []
@@ -442,6 +376,12 @@ class Motion:
             bone_name = bvh_node.in_edit_bone_name
             pose_bone = pose_bones[bone_name]
             rest_bone = arm_data.bones[bone_name]
+            if bvh_node.in_list_index == 0:
+                bone_translation = Matrix.Translation(rest_bone.head)
+                print("Matrix local", rest_bone.matrix_local)
+                print("Construct process2", bone_translation)
+                print("Construct process3", rest_bone.matrix.to_4x4())
+                print("Construct process4", bone_translation @ rest_bone.matrix.to_4x4())
             bone_rest_matrix = rest_bone.matrix_local.to_3x3()
 
             bone_rest_matrix_inv = Matrix(bone_rest_matrix)
@@ -484,6 +424,8 @@ class Motion:
                         Vector(bvh_loc) - bvh_node.rest_head_local)
                     location[frame_i] = (bone_rest_matrix_inv @
                                          bone_translate_matrix).to_translation()
+                    if i == 0:
+                        print("For bone 0 translation", bvh_loc, bvh_node.rest_head_local, bone_rest_matrix, bone_rest_matrix_inv, bone_translate_matrix, location[frame_i])
 
                 # For each location x, y, z.
                 for axis_i in range(3):
@@ -523,6 +465,9 @@ class Motion:
 
                     rotate[frame_i] = bone_rotation_matrix.to_euler(
                         pose_bone.rotation_mode, prev_euler)
+
+                    if i == 0:
+                        print("For bone 0 rotation", bvh_rot, rotate[frame_i])
 
                     prev_euler = rotate[frame_i]
 
@@ -758,6 +703,7 @@ def bvh_node_dict2armature(
         context,
         bvh_name,
         bvh_parser,
+        armature_string='',
         frame_start=1
 ):
     if frame_start < 1:
@@ -768,12 +714,12 @@ def bvh_node_dict2armature(
     for obj in scene.objects:
         obj.select_set(False)
 
-    if bpy.data.objects.get(bvh_name + "_arm") != None:
-        arm_ob = bpy.data.objects.get(bvh_name + "_arm")
+    if bpy.data.objects.get(armature_string) != None:
+        arm_ob = bpy.data.objects.get(armature_string)
         print(arm_ob)
-        arm_data = bpy.data.armatures.get(bvh_name)
+        arm_data = arm_ob.data
         print(arm_data)
-        bvh_parser.name = bvh_name + "_arm"
+        bvh_parser.name = armature_string
     else:
         arm_data = bpy.data.armatures.new(bvh_name)
         arm_ob = bpy.data.objects.new(bvh_name, arm_data)
@@ -871,13 +817,13 @@ def bvh_node_dict2armature(
     return arm_ob
 
 
-def load(context, filepath, global_matrix):
+def load(context, filepath, global_matrix, armature_string):
     parser = BVHParser(filepath, global_matrix)
 
     scene = context.scene
     frame_orig = scene.frame_current
     bvh_name = bpy.path.display_name_from_filepath(filepath)
-    bvh_node_dict2armature(context, bvh_name, parser)
+    bvh_node_dict2armature(context, bvh_name, parser, armature_string)
     context.scene.frame_set(frame_orig)
     return parser
 

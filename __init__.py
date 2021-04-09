@@ -4,6 +4,7 @@ from bpy.props import BoolProperty
 from .BVH import concatenate_motion
 from .BVH import footskate_clean
 from .BVH import camera_follow
+from .BVH.utils import armature_helper
 import subprocess
 import os
 
@@ -40,6 +41,7 @@ bl_info = {
 }
 
 
+@armature_helper(armature_string='')
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class BVHImport(bpy.types.Operator, ImportHelper):
     bl_idname = "edge_bvh_workspace.bvh"
